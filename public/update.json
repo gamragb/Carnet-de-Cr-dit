@@ -1,0 +1,10 @@
+{
+  "version": "1.0.0",
+  "minNativeVersion": "1.0.0",
+  "bundleUrl": "https://gamragb.github.io/Carnet-de-Cr-dit/bundle-1.0.0.zip",
+  "apkUrl": "",
+  "playStoreUrl": "https://play.google.com/store/apps/details?id=ma.carnetcredit.app",
+  "mandatory": false,
+  "notesFr": "Version initiale Carnet de Crédit (Hors ligne, FR/AR, PDF/PNG, PIN & Sauvegarde chiffrée).",
+  "notesAr": "الإصدار الأول من دفتر الكريدي (يعمل بدون إنترنت، عربي/فرنسي، كشوفات PDF/PNG وحماية PIN)."
+}

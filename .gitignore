@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Build & OTA outputs
+dist/
+release/
+
+# Local & Android sensitive/generated files
+.env
+.env.*
+*.log
+*.jks
+*.keystore
+android/local.properties
+android/keystore.properties
+android/.gradle/
+android/build/
+android/app/build/
+android/app/src/main/assets/public/
+android/capacitor-cordova-android-plugins/build/
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
