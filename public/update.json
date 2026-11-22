@@ -1,10 +1,10 @@
 {
-  "version": "1.1.1",
+  "version": "1.1.2",
   "minNativeVersion": "1.0.0",
-  "bundleUrl": "https://gamragb.github.io/Carnet-de-Cr-dit/bundle-1.1.1.zip",
+  "bundleUrl": "https://gamragb.github.io/Carnet-de-Cr-dit/bundle-1.1.2.zip",
   "apkUrl": "",
   "playStoreUrl": "https://play.google.com/store/apps/details?id=ma.carnetcredit.app",
   "mandatory": false,
-  "notesFr": "Ajout du bouton Déconnexion (barre supérieure et Paramètres) avec écran de reconnexion sécurisé, plus sauvegarde Google Drive toutes les 10 h.",
-  "notesAr": "إضافة زر تسجيل الخروج (في الشريط العلوي والإعدادات) مع شاشة تسجيل دخول آمنة، بالإضافة إلى النسخ التلقائي على Google Drive كل 10 ساعات."
+  "notesFr": "Correction du téléchargement OTA (vérification SHA-256), bouton Déconnexion et sauvegarde Google Drive toutes les 10 h.",
+  "notesAr": "إصلاح تحميل التحديثات التلقائية OTA (التحقق بـ SHA-256)، زر تسجيل الخروج والنسخ الاحتياطي التلقائي على Google Drive كل 10 ساعات."
 }

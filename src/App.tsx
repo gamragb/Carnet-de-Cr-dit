@@ -1175,6 +1175,7 @@ function LedgerApp() {
         await installNativeOtaUpdate(
           updateInfo.manifest.bundleUrl,
           updateInfo.latestVersion,
+          updateInfo.manifest.checksum,
           (pct) => setUpdateProgress(pct)
         );
       } catch (err) {

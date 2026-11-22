@@ -390,10 +390,12 @@ test('appUpdater: semver comparison, HTTPS validation, and update.json manifest 
   assert.equal(isValidUpdateUrl('http://evil.example.com/update.json'), false);
   assert.equal(isValidUpdateUrl('javascript:alert(1)'), false);
 
+  const sampleSha256 = 'A'.repeat(64);
   const manifest = parseUpdateManifest(
     {
       version: '1.1.0',
       bundleUrl: 'https://mon-carnet.netlify.app/bundle-1.1.0.zip',
+      checksum: sampleSha256,
       apkUrl: 'http://insecure.example.com/app.apk',
       notesFr: 'Nouveautés',
       notesAr: 'تحديث جديد',
@@ -403,8 +405,19 @@ test('appUpdater: semver comparison, HTTPS validation, and update.json manifest 
   );
   assert.equal(manifest.version, '1.1.0');
   assert.equal(manifest.bundleUrl, 'https://mon-carnet.netlify.app/bundle-1.1.0.zip');
+  assert.equal(manifest.checksum, 'a'.repeat(64));
   assert.equal(manifest.apkUrl, undefined);
   assert.equal(manifest.mandatory, true);
+
+  const manifestBadChecksum = parseUpdateManifest(
+    {
+      version: '1.1.2',
+      bundleUrl: 'https://mon-carnet.netlify.app/bundle-1.1.2.zip',
+      checksum: 'not-a-sha256',
+    },
+    'fr'
+  );
+  assert.equal(manifestBadChecksum.checksum, undefined);
 
   assert.throws(
     () => parseUpdateManifest({ version: 'bad' }, 'ar'),

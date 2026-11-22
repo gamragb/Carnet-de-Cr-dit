@@ -1,4 +1,5 @@
 import { execFileSync, execSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -68,6 +69,8 @@ if (existsSync(existingUpdatePath)) {
   }
 }
 
+const checksum = createHash('sha256').update(readFileSync(zipPath)).digest('hex');
+
 const manifest = {
   ...baseManifest,
   version,
@@ -75,6 +78,7 @@ const manifest = {
   bundleUrl: baseUrlArg
     ? `${baseUrlArg}/${zipName}`
     : `https://gamragb.github.io/Carnet-de-Cr-dit/${zipName}`,
+  checksum,
   playStoreUrl:
     baseManifest.playStoreUrl ||
     'https://play.google.com/store/apps/details?id=ma.carnetcredit.app',
@@ -90,4 +94,5 @@ console.log('');
 console.log('OTA release package generated successfully:');
 console.log(`  - ${zipPath}`);
 console.log(`  - ${manifestOutPath}`);
+console.log(`  - SHA-256: ${checksum}`);
 console.log('Upload BOTH files to your HTTPS host (Netlify / GitHub Pages / Releases).');

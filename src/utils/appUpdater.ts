@@ -10,6 +10,7 @@ export interface UpdateManifest {
   version: string;
   minNativeVersion?: string;
   bundleUrl?: string;
+  checksum?: string;
   apkUrl?: string;
   playStoreUrl?: string;
   mandatory?: boolean;
@@ -90,6 +91,9 @@ export function parseUpdateManifest(
     typeof obj.bundleUrl === 'string' && isValidUpdateUrl(obj.bundleUrl)
       ? obj.bundleUrl.trim()
       : undefined;
+  const rawChecksum =
+    typeof obj.checksum === 'string' ? obj.checksum.trim().toLowerCase() : '';
+  const checksum = /^[a-f0-9]{64}$/.test(rawChecksum) ? rawChecksum : undefined;
   const apkUrl =
     typeof obj.apkUrl === 'string' && isValidUpdateUrl(obj.apkUrl)
       ? obj.apkUrl.trim()
@@ -106,6 +110,7 @@ export function parseUpdateManifest(
         ? obj.minNativeVersion.trim()
         : undefined,
     bundleUrl,
+    checksum,
     apkUrl,
     playStoreUrl,
     mandatory: Boolean(obj.mandatory),
@@ -224,9 +229,26 @@ export async function checkForAppUpdate(
   };
 }
 
+async function computeRemoteBundleSha256(bundleUrl: string): Promise<string> {
+  const sep = bundleUrl.includes('?') ? '&' : '?';
+  const res = await fetch(`${bundleUrl}${sep}t=${Date.now()}`, { cache: 'no-store' });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}`);
+  }
+  const buffer = await res.arrayBuffer();
+  if (typeof crypto !== 'undefined' && crypto.subtle) {
+    const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+    return Array.from(new Uint8Array(hashBuffer))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+  }
+  throw new Error('SHA-256 checksum missing in update.json');
+}
+
 export async function installNativeOtaUpdate(
   bundleUrl: string,
   version: string,
+  checksum?: string,
   onProgress?: (percent: number) => void
 ): Promise<void> {
   if (!isNativeApp()) {
@@ -242,9 +264,15 @@ export async function installNativeOtaUpdate(
 
   try {
     onProgress?.(5);
+    const resolvedChecksum =
+      checksum && /^[a-f0-9]{64}$/i.test(checksum.trim())
+        ? checksum.trim().toLowerCase()
+        : await computeRemoteBundleSha256(bundleUrl);
+
     const bundle = await CapacitorUpdater.download({
       url: bundleUrl,
       version,
+      checksum: resolvedChecksum,
     });
     onProgress?.(100);
     await CapacitorUpdater.set({ id: bundle.id });
