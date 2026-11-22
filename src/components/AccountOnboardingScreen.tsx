@@ -8,6 +8,7 @@ import {
   KeyRound,
   Lock,
   LogIn,
+  Mail,
   Phone,
   ShieldCheck,
   Store,
@@ -19,6 +20,7 @@ import {
 import { DEFAULT_GOOGLE_WEB_CLIENT_ID } from '../config/driveConfig.ts';
 import { UI_TEXT } from '../i18n/translations.ts';
 import type { AccountUsageType, AppLanguage } from '../types/ledger.ts';
+import { isValidEmailAddress } from '../utils/emailBackup.ts';
 import {
   parseAndValidateBackupJSON,
   type ParsedBackupResult,
@@ -36,11 +38,44 @@ import {
   isEncryptedBackupText,
   verifyPin,
 } from '../utils/security.ts';
+import { ConfirmDialog } from './ConfirmDialog.tsx';
+
+const PIN_ATTEMPTS_KEY = 'carnet_pin_guard_v1';
+const MAX_PIN_ATTEMPTS = 5;
+const PIN_LOCKOUT_MS = 30_000;
+
+interface PinGuardState {
+  failures: number;
+  lockedUntil: number;
+}
+
+function loadPinGuardState(): PinGuardState {
+  try {
+    const raw = window.localStorage.getItem(PIN_ATTEMPTS_KEY);
+    if (!raw) return { failures: 0, lockedUntil: 0 };
+    const parsed = JSON.parse(raw) as Partial<PinGuardState>;
+    return {
+      failures: typeof parsed.failures === 'number' ? parsed.failures : 0,
+      lockedUntil: typeof parsed.lockedUntil === 'number' ? parsed.lockedUntil : 0,
+    };
+  } catch {
+    return { failures: 0, lockedUntil: 0 };
+  }
+}
+
+function savePinGuardState(state: PinGuardState): void {
+  try {
+    window.localStorage.setItem(PIN_ATTEMPTS_KEY, JSON.stringify(state));
+  } catch {
+    // Ignore storage issues
+  }
+}
 
 export interface AccountRegistrationPayload {
   fullName: string;
   businessName: string;
   phone: string;
+  email: string;
   usageType: AccountUsageType;
   language: AppLanguage;
   pin: string | null;
@@ -51,6 +86,7 @@ export interface ExistingAccountSummary {
   fullName: string;
   businessName: string;
   phone: string;
+  email?: string;
   pinEnabled: boolean;
   pinHash: string | null;
   contactsCount: number;
@@ -92,15 +128,17 @@ export function AccountOnboardingScreen({
   );
   const [signInPin, setSignInPin] = useState('');
   const [signInBusy, setSignInBusy] = useState(false);
-  const [signInFailures, setSignInFailures] = useState(0);
-  const [lockoutUntil, setLockoutUntil] = useState(0);
-  const [lockoutSec, setLockoutSec] = useState(0);
+  const [pinGuard, setPinGuard] = useState<PinGuardState>(() => loadPinGuardState());
+  const [lockoutSec, setLockoutSec] = useState<number>(() =>
+    Math.max(0, Math.ceil((loadPinGuardState().lockedUntil - Date.now()) / 1000))
+  );
   const [confirmReplaceExisting, setConfirmReplaceExisting] = useState(false);
 
   const [fullName, setFullName] = useState('');
   const [usageType, setUsageType] = useState<AccountUsageType>('business');
   const [businessName, setBusinessName] = useState('');
   const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
   const [enablePin, setEnablePin] = useState(false);
   const [pin, setPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
@@ -117,18 +155,15 @@ export function AccountOnboardingScreen({
   }, [existingAccount]);
 
   useEffect(() => {
-    if (lockoutUntil <= Date.now()) {
-      setLockoutSec(0);
-      return;
-    }
     const tick = () => {
-      const rem = Math.max(0, Math.ceil((lockoutUntil - Date.now()) / 1000));
+      const rem = Math.max(0, Math.ceil((pinGuard.lockedUntil - Date.now()) / 1000));
       setLockoutSec(rem);
     };
     tick();
+    if (pinGuard.lockedUntil <= Date.now()) return;
     const id = window.setInterval(tick, 500);
     return () => window.clearInterval(id);
-  }, [lockoutUntil]);
+  }, [pinGuard.lockedUntil]);
 
   const handleSignInSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -144,18 +179,22 @@ export function AccountOnboardingScreen({
       try {
         const ok = await verifyPin(signInPin, existingAccount.pinHash);
         if (!ok) {
-          const nextFail = signInFailures + 1;
-          if (nextFail >= 5) {
-            setSignInFailures(0);
-            setLockoutUntil(Date.now() + 30_000);
-          } else {
-            setSignInFailures(nextFail);
-          }
+          const nextFail = pinGuard.failures + 1;
+          const lockedUntil =
+            nextFail >= MAX_PIN_ATTEMPTS ? Date.now() + PIN_LOCKOUT_MS : 0;
+          const nextGuard: PinGuardState = {
+            failures: nextFail >= MAX_PIN_ATTEMPTS ? 0 : nextFail,
+            lockedUntil,
+          };
+          savePinGuardState(nextGuard);
+          setPinGuard(nextGuard);
           setSignInPin('');
           setError(pinText.wrongPin);
           return;
         }
-        setSignInFailures(0);
+        const cleanGuard: PinGuardState = { failures: 0, lockedUntil: 0 };
+        savePinGuardState(cleanGuard);
+        setPinGuard(cleanGuard);
         onSignIn();
       } finally {
         setSignInBusy(false);
@@ -173,8 +212,51 @@ export function AccountOnboardingScreen({
   const [passError, setPassError] = useState('');
   const [passBusy, setPassBusy] = useState(false);
 
+  // Paste from Email restore modal state
+  const [pasteEmailOpen, setPasteEmailOpen] = useState(false);
+  const [pasteEmailText, setPasteEmailText] = useState('');
+  const [pasteEmailError, setPasteEmailError] = useState('');
+
+  // Confirmation before overwriting an existing saved account via restore
+  const [pendingOverwriteRestore, setPendingOverwriteRestore] = useState<{
+    payload: ParsedBackupResult;
+    driveMeta?: { fileId: string; email: string };
+  } | null>(null);
+
   const [driveRestoreAvailable, setDriveRestoreAvailable] = useState(false);
   const [driveRestoring, setDriveRestoring] = useState(false);
+
+  const requestRestoreWithConfirm = (
+    payload: ParsedBackupResult,
+    driveMeta?: { fileId: string; email: string }
+  ) => {
+    if (hasSavedAccount) {
+      setPendingOverwriteRestore({ payload, driveMeta });
+      return;
+    }
+    onRestoreBackup(payload, driveMeta);
+  };
+
+  useEffect(() => {
+    const onAndroidBack = (ev: Event) => {
+      if (pendingOverwriteRestore) {
+        ev.preventDefault();
+        setPendingOverwriteRestore(null);
+      } else if (pasteEmailOpen) {
+        ev.preventDefault();
+        setPasteEmailOpen(false);
+      } else if (pendingEncryptedRaw) {
+        ev.preventDefault();
+        setPendingEncryptedRaw(null);
+      } else if (mode === 'register' && hasSavedAccount) {
+        ev.preventDefault();
+        setError('');
+        setMode('signin');
+      }
+    };
+    window.addEventListener('carnet:android-back', onAndroidBack);
+    return () => window.removeEventListener('carnet:android-back', onAndroidBack);
+  }, [pendingOverwriteRestore, pasteEmailOpen, pendingEncryptedRaw, mode, hasSavedAccount]);
 
   useEffect(() => {
     let active = true;
@@ -197,7 +279,7 @@ export function AccountOnboardingScreen({
         webClientId: webDriveClientId || DEFAULT_GOOGLE_WEB_CLIENT_ID,
       });
       const parsed = parseAndValidateBackupJSON(res.json, lang);
-      onRestoreBackup(parsed, { fileId: res.fileId, email: res.email });
+      requestRestoreWithConfirm(parsed, { fileId: res.fileId, email: res.email });
     } catch (err) {
       setError(formatDriveError(err, lang));
     } finally {
@@ -228,6 +310,12 @@ export function AccountOnboardingScreen({
     }
     const formattedPhone = cleanPhoneRaw ? formatMoroccanPhone(cleanPhoneRaw) : '';
 
+    const cleanEmail = email.trim();
+    if (cleanEmail && !isValidEmailAddress(cleanEmail)) {
+      setError(ob.emailInvalidError);
+      return;
+    }
+
     let cleanPin: string | null = null;
     let recovery: { question: string; answer: string } | null = null;
 
@@ -256,6 +344,7 @@ export function AccountOnboardingScreen({
         fullName: cleanName,
         businessName: businessName.trim(),
         phone: formattedPhone,
+        email: cleanEmail,
         usageType,
         language: lang,
         pin: cleanPin,
@@ -292,7 +381,7 @@ export function AccountOnboardingScreen({
       }
 
       const parsed = parseAndValidateBackupJSON(text, lang);
-      onRestoreBackup(parsed);
+      requestRestoreWithConfirm(parsed);
     } catch (err) {
       setError(err instanceof Error ? err.message : s.restoreReadError);
     }
@@ -312,7 +401,7 @@ export function AccountOnboardingScreen({
       const parsed = parseAndValidateBackupJSON(decrypted, lang);
       setPendingEncryptedRaw(null);
       setPassInput('');
-      onRestoreBackup(parsed);
+      requestRestoreWithConfirm(parsed);
     } catch (err) {
       setPassError(err instanceof Error ? err.message : s.restoreReadError);
     } finally {
@@ -406,6 +495,20 @@ export function AccountOnboardingScreen({
                   <p dir="ltr" className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
                     {existingAccount.phone}
                   </p>
+                )}
+                {existingAccount.email && (
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                    <span
+                      dir="ltr"
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-sky-700 dark:text-sky-400"
+                    >
+                      <Mail className="h-3.5 w-3.5 shrink-0" />
+                      {existingAccount.email}
+                    </span>
+                    <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-bold text-sky-800 dark:bg-sky-950 dark:text-sky-300">
+                      {ob.autoEmailBadge}
+                    </span>
+                  </div>
                 )}
                 <p className="mt-2 text-[11px] font-bold text-slate-500 dark:text-slate-400">
                   {ob.savedSummary(
@@ -653,6 +756,33 @@ export function AccountOnboardingScreen({
               />
             </div>
 
+            {/* Email (Auto-Backup every 10 hours) */}
+            <div className="rounded-2xl border border-sky-200/80 bg-sky-50/50 p-3.5 dark:border-sky-900/50 dark:bg-sky-950/30">
+              <label
+                htmlFor="reg-email"
+                className="flex items-center gap-1.5 text-xs font-bold text-slate-800 dark:text-slate-200"
+              >
+                <Mail className="h-3.5 w-3.5 text-sky-600 dark:text-sky-400" />
+                {ob.emailLabel}
+              </label>
+              <input
+                id="reg-email"
+                type="email"
+                dir="ltr"
+                autoComplete="email"
+                value={email}
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  if (error) setError('');
+                }}
+                placeholder={ob.emailPlaceholder}
+                className="mt-1.5 min-h-[46px] w-full rounded-2xl border border-sky-200 bg-white px-3.5 text-sm font-medium text-slate-900 outline-none transition focus:border-sky-600 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+              />
+              <p className="mt-1.5 text-[11px] leading-relaxed text-slate-600 dark:text-slate-300">
+                {ob.emailHint}
+              </p>
+            </div>
+
             {/* Optional PIN Lock Toggle */}
             <div className="rounded-2xl border border-slate-200/90 bg-slate-50/70 p-3.5 dark:border-slate-800 dark:bg-slate-800/50">
               <div className="flex items-center justify-between gap-3">
@@ -679,13 +809,13 @@ export function AccountOnboardingScreen({
                     setError('');
                   }}
                   dir="ltr"
-                  className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${
+                  className={`inline-flex h-7 w-12 shrink-0 items-center rounded-full p-1 transition-colors ${
                     enablePin ? 'bg-teal-600' : 'bg-slate-300 dark:bg-slate-700'
                   }`}
                 >
                   <span
-                    className={`block h-5 w-5 rounded-full bg-white shadow transition-transform ${
-                      enablePin ? 'translate-x-6' : 'translate-x-1'
+                    className={`h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${
+                      enablePin ? 'translate-x-5' : 'translate-x-0'
                     }`}
                   />
                 </button>
@@ -783,14 +913,27 @@ export function AccountOnboardingScreen({
           </div>
 
           <div className="space-y-2">
+            <button
+              type="button"
+              onClick={() => {
+                setPasteEmailText('');
+                setPasteEmailError('');
+                setPasteEmailOpen(true);
+              }}
+              className="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-2xl border border-sky-200 bg-sky-50 px-3 text-xs font-bold text-sky-800 transition hover:bg-sky-100 dark:border-sky-900/60 dark:bg-sky-950/40 dark:text-sky-300"
+            >
+              <Mail className="h-4 w-4 shrink-0" />
+              <span>{ob.restoreEmailPasteBtn}</span>
+            </button>
+
             {driveRestoreAvailable && (
               <button
                 type="button"
                 disabled={driveRestoring}
                 onClick={handleRestoreFromDrive}
-                className="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-2xl border border-sky-200 bg-sky-50 px-3 text-xs font-bold text-sky-800 transition hover:bg-sky-100 disabled:opacity-60 dark:border-sky-900/60 dark:bg-sky-950/40 dark:text-sky-300"
+                className="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 text-xs font-bold text-slate-700 transition hover:bg-slate-100 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
               >
-                <Cloud className="h-4 w-4 shrink-0" />
+                <Cloud className="h-4 w-4 shrink-0 text-sky-600 dark:text-sky-400" />
                 <span>{driveRestoring ? ob.restoringDriveBtn : ob.restoreDriveBtn}</span>
               </button>
             )}
@@ -889,6 +1032,115 @@ export function AccountOnboardingScreen({
           </div>
         </div>
       )}
+
+      {/* Paste Backup from Email Modal */}
+      {pasteEmailOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/55 p-4 backdrop-blur-[2px] sm:items-center"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="animate-sheet-up w-full max-w-sm rounded-3xl bg-white p-5 shadow-2xl dark:border dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300">
+                  <Mail className="h-5 w-5" />
+                </div>
+                <h3 className="text-base font-extrabold text-slate-900 dark:text-white">
+                  {ob.pasteEmailModalTitle}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPasteEmailOpen(false)}
+                className="rounded-full p-2 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                aria-label={t.statement.close}
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <p className="mt-2 text-xs leading-relaxed text-slate-600 dark:text-slate-300">
+              {ob.pasteEmailModalDesc}
+            </p>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                setPasteEmailError('');
+                try {
+                  const parsed = parseAndValidateBackupJSON(pasteEmailText, lang);
+                  setPasteEmailOpen(false);
+                  setPasteEmailText('');
+                  requestRestoreWithConfirm(parsed);
+                } catch (err) {
+                  setPasteEmailError(
+                    err instanceof Error ? err.message : s.restoreReadError
+                  );
+                }
+              }}
+              className="mt-3 space-y-2.5"
+            >
+              <textarea
+                rows={5}
+                dir="ltr"
+                value={pasteEmailText}
+                onChange={(e) => {
+                  setPasteEmailText(e.target.value);
+                  if (pasteEmailError) setPasteEmailError('');
+                }}
+                placeholder={ob.pasteEmailPlaceholder}
+                autoFocus
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 font-mono text-xs text-slate-900 outline-none focus:border-sky-600 focus:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+              />
+              {pasteEmailError && (
+                <p className="text-xs font-semibold text-rose-600 dark:text-rose-400">
+                  {pasteEmailError}
+                </p>
+              )}
+              <div className="grid grid-cols-2 gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setPasteEmailOpen(false)}
+                  className="min-h-[44px] rounded-2xl border border-slate-200 text-sm font-bold text-slate-700 dark:border-slate-700 dark:text-slate-200"
+                >
+                  {t.dialogs.cancelDefault}
+                </button>
+                <button
+                  type="submit"
+                  className="min-h-[44px] rounded-2xl bg-sky-600 text-sm font-bold text-white transition hover:bg-sky-700"
+                >
+                  {ob.pasteEmailSubmitBtn}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Overwrite Existing Local Account Confirmation Modal */}
+      <ConfirmDialog
+        open={Boolean(pendingOverwriteRestore)}
+        lang={lang}
+        title={s.confirmRestoreTitle}
+        description={
+          pendingOverwriteRestore
+            ? `${ob.replaceAccountWarning} ${s.confirmRestoreDesc(
+                pendingOverwriteRestore.payload.contacts.length,
+                pendingOverwriteRestore.payload.transactions.length
+              )}`
+            : ob.replaceAccountWarning
+        }
+        confirmLabel={s.restoreReplaceBtn}
+        danger
+        onConfirm={() => {
+          if (!pendingOverwriteRestore) return;
+          const target = pendingOverwriteRestore;
+          setPendingOverwriteRestore(null);
+          onRestoreBackup(target.payload, target.driveMeta);
+        }}
+        onCancel={() => setPendingOverwriteRestore(null)}
+      />
     </div>
   );
 }

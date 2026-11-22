@@ -300,8 +300,12 @@ export function PrintableStatement({
       return { filteredEntries: entries, previousBalance: 0, showPrev: false };
     }
     const today = getTodayISODate();
-    const fromDate = rangeMode === 'month' ? `${today.slice(0, 7)}-01` : customFrom;
-    const toDate = rangeMode === 'month' ? today : customTo;
+    const rawFrom = rangeMode === 'month' ? `${today.slice(0, 7)}-01` : customFrom;
+    const rawTo = rangeMode === 'month' ? today : customTo;
+    const fromDate =
+      rawFrom && rawTo && rawFrom > rawTo ? rawTo : rawFrom;
+    const toDate =
+      rawFrom && rawTo && rawFrom > rawTo ? rawFrom : rawTo;
 
     let prevBal = 0;
     const inRange: LedgerEntryWithBalance[] = [];
@@ -484,7 +488,7 @@ export function PrintableStatement({
               type="button"
               disabled={sharing}
               onClick={handleShareImage}
-              className="flex min-h-[46px] flex-1 items-center justify-center gap-1.5 rounded-2xl border border-emerald-200 bg-emerald-50 px-3 text-xs font-bold text-emerald-800 hover:bg-emerald-100 disabled:opacity-60"
+              className="flex min-h-[46px] flex-1 items-center justify-center gap-1.5 rounded-2xl border border-emerald-200 bg-emerald-50 px-3 text-xs font-bold text-emerald-800 hover:bg-emerald-100 disabled:opacity-60 dark:border-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 dark:hover:bg-emerald-900/60"
             >
               <ImageIcon className="h-4 w-4" />
               <span>{s.shareImgBtn}</span>

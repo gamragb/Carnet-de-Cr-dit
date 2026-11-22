@@ -168,9 +168,11 @@ export function DeadlinesView({
                   {formatMAD(transaction.amount, { masked: hideAmounts, hideDecimals, lang })}
                 </span>
               ) : (
-                t.remaining(
-                  formatMAD(remainingAmount, { masked: hideAmounts, hideDecimals, lang })
-                )
+                <bdi className="tabular-nums">
+                  {t.remaining(
+                    formatMAD(remainingAmount, { masked: hideAmounts, hideDecimals, lang })
+                  )}
+                </bdi>
               )}
             </p>
           </div>

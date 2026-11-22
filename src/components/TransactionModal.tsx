@@ -605,18 +605,17 @@ export function TransactionModal({
             >
               {t.amountLabel}
             </label>
-            <div className="relative mt-1.5">
+            <div dir="ltr" className="relative mt-1.5">
               <input
                 id="tx-amount"
                 type="text"
                 inputMode="decimal"
-                dir="ltr"
                 value={amountInput}
                 onChange={(e) => setAmountInput(e.target.value)}
                 placeholder="0,00"
-                className="tabular-nums w-full rounded-2xl border border-slate-200 bg-slate-50/70 py-3.5 ps-4 pe-16 text-start text-xl font-extrabold text-slate-900 outline-none transition focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                className="tabular-nums w-full rounded-2xl border border-slate-200 bg-slate-50/70 py-3.5 pl-4 pr-16 text-left text-xl font-extrabold text-slate-900 outline-none transition focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
               />
-              <span className="pointer-events-none absolute top-1/2 end-4 -translate-y-1/2 text-sm font-extrabold text-slate-400">
+              <span className="pointer-events-none absolute top-1/2 right-4 -translate-y-1/2 text-sm font-extrabold text-slate-400">
                 {currencyLabel}
               </span>
             </div>

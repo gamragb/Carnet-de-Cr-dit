@@ -16,10 +16,12 @@ import {
   Languages,
   Lock,
   LogOut,
+  Mail,
   Moon,
   Phone,
   RefreshCw,
   RotateCcw,
+  Send,
   Shield,
   ShieldCheck,
   Smartphone,
@@ -58,6 +60,11 @@ import {
   getTodayISODate,
   isValidPhoneInput,
 } from '../utils/formatters.ts';
+import {
+  EMAIL_AUTO_BACKUP_INTERVAL_HOURS,
+  computeNextEmailBackupIso,
+  isValidEmailAddress,
+} from '../utils/emailBackup.ts';
 import { computeNextDriveBackupIso } from '../utils/googleDriveBackup.ts';
 import { isNativeApp } from '../utils/nativePlatform.ts';
 import type { UpdateCheckResult } from '../utils/appUpdater.ts';
@@ -77,9 +84,14 @@ interface SettingsViewProps {
   onUpdateAccountProfile: (data: {
     fullName: string;
     phone: string;
+    email: string;
     businessName: string;
     usageType: AccountUsageType;
   }) => void;
+  emailBackupBusy: boolean;
+  onSaveEmailBackupAddress: (email: string) => void;
+  onToggleEmailAutoBackup: () => void;
+  onSendEmailBackupNow: () => void;
   onUpdateAutoLockMinutes: (minutes: number) => void;
   onUpdateCsvDelimiter: (delimiter: ',' | ';') => void;
   onUpdateWhatsAppTemplate: (template: string) => void;
@@ -126,6 +138,10 @@ export function SettingsView({
   onToggleHideAmounts,
   onToggleHideDecimals,
   onUpdateAccountProfile,
+  emailBackupBusy,
+  onSaveEmailBackupAddress,
+  onToggleEmailAutoBackup,
+  onSendEmailBackupNow,
   onUpdateAutoLockMinutes,
   onUpdateCsvDelimiter,
   onUpdateWhatsAppTemplate,
@@ -160,11 +176,20 @@ export function SettingsView({
 
   const [fullNameInput, setFullNameInput] = useState(db.settings.account?.fullName ?? '');
   const [phoneInput, setPhoneInput] = useState(db.settings.account?.phone ?? '');
+  const [emailInput, setEmailInput] = useState(
+    db.settings.account?.email ?? db.settings.emailBackup?.email ?? ''
+  );
+  const [backupEmailInput, setBackupEmailInput] = useState(
+    db.settings.emailBackup?.email ?? db.settings.account?.email ?? ''
+  );
   const [usageTypeInput, setUsageTypeInput] = useState<AccountUsageType>(
     db.settings.account?.usageType ?? 'business'
   );
   const [businessNameInput, setBusinessNameInput] = useState(db.settings.businessName);
   const [accountError, setAccountError] = useState('');
+  const [pasteEmailOpen, setPasteEmailOpen] = useState(false);
+  const [pasteEmailText, setPasteEmailText] = useState('');
+  const [pasteEmailError, setPasteEmailError] = useState('');
   const [waTemplateInput, setWaTemplateInput] = useState(db.settings.whatsAppTemplate);
   const [updateUrlInput, setUpdateUrlInput] = useState(
     db.settings.updateManifestUrl ?? ''
@@ -180,8 +205,13 @@ export function SettingsView({
   useEffect(() => {
     setFullNameInput(db.settings.account?.fullName ?? '');
     setPhoneInput(db.settings.account?.phone ?? '');
+    setEmailInput(db.settings.account?.email ?? db.settings.emailBackup?.email ?? '');
     setUsageTypeInput(db.settings.account?.usageType ?? 'business');
-  }, [db.settings.account]);
+  }, [db.settings.account, db.settings.emailBackup?.email]);
+
+  useEffect(() => {
+    setBackupEmailInput(db.settings.emailBackup?.email ?? db.settings.account?.email ?? '');
+  }, [db.settings.emailBackup?.email, db.settings.account?.email]);
 
   useEffect(() => {
     setBusinessNameInput(db.settings.businessName);
@@ -211,6 +241,41 @@ export function SettingsView({
   const jsonInputRef = useRef<HTMLInputElement | null>(null);
   const csvInputRef = useRef<HTMLInputElement | null>(null);
 
+  // Close inner SettingsView modals when Android hardware Back button is pressed
+  useEffect(() => {
+    const onAndroidBack = (ev: Event) => {
+      if (pasteEmailOpen) {
+        ev.preventDefault();
+        setPasteEmailOpen(false);
+      } else if (pendingRestore) {
+        ev.preventDefault();
+        setPendingRestore(null);
+      } else if (passModalMode) {
+        ev.preventDefault();
+        setPassModalMode(null);
+        setPendingEncryptedRaw(null);
+      } else if (pinModalMode) {
+        ev.preventDefault();
+        setPinModalMode(null);
+      } else if (confirmClearOpen) {
+        ev.preventDefault();
+        setConfirmClearOpen(false);
+      } else if (confirmResetAccountOpen) {
+        ev.preventDefault();
+        setConfirmResetAccountOpen(false);
+      }
+    };
+    window.addEventListener('carnet:android-back', onAndroidBack);
+    return () => window.removeEventListener('carnet:android-back', onAndroidBack);
+  }, [
+    pasteEmailOpen,
+    pendingRestore,
+    passModalMode,
+    pinModalMode,
+    confirmClearOpen,
+    confirmResetAccountOpen,
+  ]);
+
   const handleSaveAccountProfile = (e: React.FormEvent) => {
     e.preventDefault();
     setAccountError('');
@@ -224,11 +289,18 @@ export function SettingsView({
       setAccountError(UI_TEXT[lang].onboarding.phoneInvalidError);
       return;
     }
+    const cleanEmail = emailInput.trim();
+    if (cleanEmail && !isValidEmailAddress(cleanEmail)) {
+      setAccountError(UI_TEXT[lang].onboarding.emailInvalidError);
+      return;
+    }
     const formattedPhone = cleanPhone ? formatMoroccanPhone(cleanPhone) : '';
     setPhoneInput(formattedPhone);
+    setEmailInput(cleanEmail);
     onUpdateAccountProfile({
       fullName: cleanName,
       phone: formattedPhone,
+      email: cleanEmail,
       businessName: businessNameInput.trim(),
       usageType: usageTypeInput,
     });
@@ -255,6 +327,26 @@ export function SettingsView({
     if (parsed) {
       setPendingRestore(parsed);
     }
+  };
+
+  const emailCfg = db.settings.emailBackup;
+  const emailConfiguredAddress = (emailCfg?.email || db.settings.account?.email || '').trim();
+  const hasEmailConfigured = isValidEmailAddress(emailConfiguredAddress);
+  const emailAutoEnabled = Boolean(emailCfg?.enabled && hasEmailConfigured);
+  const emailIntervalHours = emailCfg?.intervalHours || EMAIL_AUTO_BACKUP_INTERVAL_HOURS;
+  const nextEmailIso =
+    emailAutoEnabled && emailCfg?.lastBackupAt
+      ? computeNextEmailBackupIso(emailCfg.lastBackupAt, emailIntervalHours)
+      : null;
+
+  const handleSaveBackupEmailSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleaned = backupEmailInput.trim();
+    if (!isValidEmailAddress(cleaned)) {
+      showToast(UI_TEXT[lang].onboarding.emailInvalidError, 'error');
+      return;
+    }
+    onSaveEmailBackupAddress(cleaned);
   };
 
   const drive = db.settings.driveBackup;
@@ -540,6 +632,27 @@ export function SettingsView({
             />
           </div>
 
+          <div>
+            <label className="flex items-center gap-1.5 text-xs font-bold text-slate-700 dark:text-slate-300">
+              <Mail className="h-3.5 w-3.5 text-sky-600 dark:text-sky-400" />
+              {s.accountEmailLabel}
+            </label>
+            <input
+              type="email"
+              dir="ltr"
+              value={emailInput}
+              onChange={(e) => {
+                setEmailInput(e.target.value);
+                if (accountError) setAccountError('');
+              }}
+              placeholder={s.accountEmailPlaceholder}
+              className="mt-1 min-h-[42px] w-full rounded-2xl border border-slate-200 bg-slate-50 px-3.5 text-sm font-medium text-slate-900 outline-none focus:border-sky-600 focus:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-white dark:focus:bg-slate-900"
+            />
+            <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+              {s.accountEmailHint}
+            </p>
+          </div>
+
           <div className="grid grid-cols-1 gap-2 pt-1 sm:grid-cols-2">
             <button
               type="submit"
@@ -675,15 +788,15 @@ export function SettingsView({
             aria-checked={db.settings.hideAmounts}
             onClick={onToggleHideAmounts}
             dir="ltr"
-            className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${
+            className={`inline-flex h-7 w-12 shrink-0 items-center rounded-full p-1 transition-colors ${
               db.settings.hideAmounts
                 ? 'bg-teal-600'
                 : 'bg-slate-300 dark:bg-slate-700'
             }`}
           >
             <span
-              className={`block h-5 w-5 rounded-full bg-white shadow transition-transform ${
-                db.settings.hideAmounts ? 'translate-x-6' : 'translate-x-1'
+              className={`h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${
+                db.settings.hideAmounts ? 'translate-x-5' : 'translate-x-0'
               }`}
             />
           </button>
@@ -706,15 +819,15 @@ export function SettingsView({
             aria-checked={db.settings.hideDecimals}
             onClick={onToggleHideDecimals}
             dir="ltr"
-            className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${
+            className={`inline-flex h-7 w-12 shrink-0 items-center rounded-full p-1 transition-colors ${
               db.settings.hideDecimals
                 ? 'bg-teal-600'
                 : 'bg-slate-300 dark:bg-slate-700'
             }`}
           >
             <span
-              className={`block h-5 w-5 rounded-full bg-white shadow transition-transform ${
-                db.settings.hideDecimals ? 'translate-x-6' : 'translate-x-1'
+              className={`h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${
+                db.settings.hideDecimals ? 'translate-x-5' : 'translate-x-0'
               }`}
             />
           </button>
@@ -890,6 +1003,173 @@ export function SettingsView({
         </div>
       </section>
 
+      {/* Automatic Email Backup (Every 10 Hours) */}
+      <section className="space-y-3.5 rounded-3xl border border-sky-200/90 bg-white p-4 shadow-sm dark:border-sky-900/50 dark:bg-slate-900">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5">
+            <div
+              className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl ${
+                emailAutoEnabled
+                  ? 'bg-sky-50 text-sky-700 dark:bg-sky-950/60 dark:text-sky-300'
+                  : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
+              }`}
+            >
+              <Mail className="h-5 w-5" />
+            </div>
+            <div className="min-w-0">
+              <h3 className="text-sm font-extrabold text-slate-900 dark:text-white">
+                {s.emailBackupTitle}
+              </h3>
+              <p className="truncate text-xs text-slate-500 dark:text-slate-400">
+                {hasEmailConfigured
+                  ? emailConfiguredAddress
+                  : s.emailBackupSubtitle(emailIntervalHours)}
+              </p>
+            </div>
+          </div>
+
+          <span
+            className={`shrink-0 rounded-full px-2.5 py-0.5 text-[11px] font-bold ${
+              emailAutoEnabled
+                ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
+            }`}
+          >
+            {emailAutoEnabled ? s.emailBackupActiveBadge : s.emailBackupInactiveBadge}
+          </span>
+        </div>
+
+        <form onSubmit={handleSaveBackupEmailSubmit} className="space-y-1.5">
+          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
+            {s.emailBackupInputLabel}
+          </label>
+          <div className="flex gap-2">
+            <input
+              type="email"
+              dir="ltr"
+              value={backupEmailInput}
+              onChange={(e) => setBackupEmailInput(e.target.value)}
+              placeholder={s.accountEmailPlaceholder}
+              className="min-h-[42px] flex-1 rounded-2xl border border-slate-200 bg-slate-50 px-3.5 text-xs font-medium text-slate-900 outline-none focus:border-sky-600 focus:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+            />
+            <button
+              type="submit"
+              disabled={emailBackupBusy}
+              className="min-h-[42px] shrink-0 rounded-2xl bg-sky-600 px-3.5 text-xs font-bold text-white shadow-xs transition hover:bg-sky-700 disabled:opacity-60"
+            >
+              {s.emailBackupSaveBtn}
+            </button>
+          </div>
+        </form>
+
+        {emailCfg?.needsActivation && hasEmailConfigured && (
+          <div className="flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs font-semibold text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/50 dark:text-amber-200">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{s.emailBackupActivationHint(emailConfiguredAddress)}</span>
+          </div>
+        )}
+
+        {hasEmailConfigured && (
+          <>
+            <div className="flex items-center justify-between gap-3 rounded-2xl bg-slate-50/90 p-3 dark:bg-slate-800/60">
+              <div className="min-w-0">
+                <p className="flex items-center gap-1.5 text-xs font-extrabold text-slate-900 dark:text-white">
+                  <Clock className="h-3.5 w-3.5 text-sky-600 dark:text-sky-400" />
+                  <span>{s.emailBackupToggleTitle(emailIntervalHours)}</span>
+                </p>
+                <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+                  {s.emailBackupToggleDesc}
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={emailAutoEnabled}
+                onClick={onToggleEmailAutoBackup}
+                dir="ltr"
+                className={`inline-flex h-7 w-12 shrink-0 items-center rounded-full p-1 transition-colors ${
+                  emailAutoEnabled ? 'bg-sky-600' : 'bg-slate-300 dark:bg-slate-700'
+                }`}
+              >
+                <span
+                  className={`h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${
+                    emailAutoEnabled ? 'translate-x-5' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+
+            <div className="space-y-1 rounded-2xl border border-slate-100 bg-slate-50/60 px-3 py-2.5 text-[11px] text-slate-600 dark:border-slate-800 dark:bg-slate-800/40 dark:text-slate-300">
+              <p className="font-semibold">
+                {emailCfg?.lastBackupAt
+                  ? s.emailBackupLastSentLabel(
+                      (() => {
+                        const { date, time } = formatDateTimeFR(
+                          emailCfg.lastBackupAt,
+                          lang
+                        );
+                        return time ? `${date} • ${time}` : date;
+                      })()
+                    )
+                  : s.emailBackupNeverSent}
+              </p>
+              {nextEmailIso && (
+                <p className="text-sky-700 dark:text-sky-400">
+                  {s.emailBackupNextLabel(
+                    (() => {
+                      const { date, time } = formatDateTimeFR(nextEmailIso, lang);
+                      return time ? `${date} • ${time}` : date;
+                    })()
+                  )}
+                </p>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                disabled={emailBackupBusy}
+                onClick={onSendEmailBackupNow}
+                className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-2xl bg-sky-600 px-3 text-xs font-bold text-white shadow-sm transition hover:bg-sky-700 disabled:opacity-60"
+              >
+                <Send className="h-4 w-4 shrink-0" />
+                <span className="truncate">
+                  {emailBackupBusy ? s.emailBackupSendingBtn : s.emailBackupSendNowBtn}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setPasteEmailText('');
+                  setPasteEmailError('');
+                  setPasteEmailOpen(true);
+                }}
+                className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-2xl border border-sky-200 bg-sky-50 px-3 text-xs font-bold text-sky-800 transition hover:bg-sky-100 dark:border-sky-900/60 dark:bg-sky-950/40 dark:text-sky-300"
+              >
+                <Upload className="h-4 w-4 shrink-0" />
+                <span className="truncate">{s.emailBackupPasteRestoreBtn}</span>
+              </button>
+            </div>
+          </>
+        )}
+
+        {!hasEmailConfigured && (
+          <button
+            type="button"
+            onClick={() => {
+              setPasteEmailText('');
+              setPasteEmailError('');
+              setPasteEmailOpen(true);
+            }}
+            className="flex min-h-[42px] w-full items-center justify-center gap-1.5 rounded-2xl border border-sky-200 bg-sky-50 px-3 text-xs font-bold text-sky-800 transition hover:bg-sky-100 dark:border-sky-900/60 dark:bg-sky-950/40 dark:text-sky-300"
+          >
+            <Upload className="h-4 w-4 shrink-0" />
+            <span>{s.emailBackupPasteRestoreBtn}</span>
+          </button>
+        )}
+      </section>
+
       {/* Google Drive Auto-Backup (Every 10 Hours) */}
       <section className="space-y-3.5 rounded-3xl border border-slate-200/90 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <div className="flex items-center justify-between gap-2">
@@ -955,13 +1235,13 @@ export function SettingsView({
                 aria-checked={driveEnabled}
                 onClick={onToggleDriveAutoBackup}
                 dir="ltr"
-                className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${
+                className={`inline-flex h-7 w-12 shrink-0 items-center rounded-full p-1 transition-colors ${
                   driveEnabled ? 'bg-teal-600' : 'bg-slate-300 dark:bg-slate-700'
                 }`}
               >
                 <span
-                  className={`block h-5 w-5 rounded-full bg-white shadow transition-transform ${
-                    driveEnabled ? 'translate-x-6' : 'translate-x-1'
+                  className={`h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${
+                    driveEnabled ? 'translate-x-5' : 'translate-x-0'
                   }`}
                 />
               </button>
@@ -1521,6 +1801,91 @@ export function SettingsView({
         }}
         onCancel={() => setConfirmResetAccountOpen(false)}
       />
+
+      {/* Paste Backup from Email Modal */}
+      {pasteEmailOpen && (
+        <div
+          className="no-print fixed inset-0 z-50 flex items-end justify-center bg-slate-900/55 p-4 backdrop-blur-[2px] sm:items-center"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="animate-sheet-up w-full max-w-sm rounded-3xl bg-white p-5 shadow-2xl dark:border dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300">
+                  <Mail className="h-5 w-5" />
+                </div>
+                <h3 className="text-base font-extrabold text-slate-900 dark:text-white">
+                  {UI_TEXT[lang].onboarding.pasteEmailModalTitle}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPasteEmailOpen(false)}
+                className="rounded-full p-2 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                aria-label={UI_TEXT[lang].statement.close}
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <p className="mt-2 text-xs leading-relaxed text-slate-600 dark:text-slate-300">
+              {UI_TEXT[lang].onboarding.pasteEmailModalDesc}
+            </p>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                setPasteEmailError('');
+                try {
+                  const parsed = parseAndValidateBackupJSON(pasteEmailText, lang);
+                  setPasteEmailOpen(false);
+                  setPasteEmailText('');
+                  setPendingRestore(parsed);
+                } catch (err) {
+                  setPasteEmailError(
+                    err instanceof Error ? err.message : s.restoreReadError
+                  );
+                }
+              }}
+              className="mt-3 space-y-2.5"
+            >
+              <textarea
+                rows={5}
+                dir="ltr"
+                value={pasteEmailText}
+                onChange={(e) => {
+                  setPasteEmailText(e.target.value);
+                  if (pasteEmailError) setPasteEmailError('');
+                }}
+                placeholder={UI_TEXT[lang].onboarding.pasteEmailPlaceholder}
+                autoFocus
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 font-mono text-xs text-slate-900 outline-none focus:border-sky-600 focus:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+              />
+              {pasteEmailError && (
+                <p className="text-xs font-semibold text-rose-600 dark:text-rose-400">
+                  {pasteEmailError}
+                </p>
+              )}
+              <div className="grid grid-cols-2 gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setPasteEmailOpen(false)}
+                  className="min-h-[44px] rounded-2xl border border-slate-200 text-sm font-bold text-slate-700 dark:border-slate-700 dark:text-slate-200"
+                >
+                  {d.cancelDefault}
+                </button>
+                <button
+                  type="submit"
+                  className="min-h-[44px] rounded-2xl bg-sky-600 text-sm font-bold text-white transition hover:bg-sky-700"
+                >
+                  {UI_TEXT[lang].onboarding.pasteEmailSubmitBtn}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -27,8 +27,18 @@ public class DriveBackupWorker extends Worker {
         super(context, workerParams);
     }
 
+    private static final String KEY_WORKER_SCHEDULED_HOURS = "worker_scheduled_hours";
+
     public static void schedulePeriodicBackup(Context context, int intervalHours) {
         int safeHours = Math.max(1, intervalHours);
+        Context appContext = context.getApplicationContext();
+        SharedPreferences prefs = DriveRestHelper.getPrefs(appContext);
+        int lastScheduledHours = prefs.getInt(KEY_WORKER_SCHEDULED_HOURS, -1);
+        ExistingPeriodicWorkPolicy policy =
+            (lastScheduledHours == safeHours)
+                ? ExistingPeriodicWorkPolicy.KEEP
+                : ExistingPeriodicWorkPolicy.UPDATE;
+
         Constraints constraints = new Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build();
@@ -43,15 +53,18 @@ public class DriveBackupWorker extends Worker {
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15, TimeUnit.MINUTES)
             .build();
 
-        WorkManager.getInstance(context.getApplicationContext()).enqueueUniquePeriodicWork(
+        WorkManager.getInstance(appContext).enqueueUniquePeriodicWork(
             UNIQUE_WORK_NAME,
-            ExistingPeriodicWorkPolicy.UPDATE,
+            policy,
             request
         );
+        prefs.edit().putInt(KEY_WORKER_SCHEDULED_HOURS, safeHours).apply();
     }
 
     public static void cancelPeriodicBackup(Context context) {
-        WorkManager.getInstance(context.getApplicationContext()).cancelUniqueWork(UNIQUE_WORK_NAME);
+        Context appContext = context.getApplicationContext();
+        WorkManager.getInstance(appContext).cancelUniqueWork(UNIQUE_WORK_NAME);
+        DriveRestHelper.getPrefs(appContext).edit().remove(KEY_WORKER_SCHEDULED_HOURS).apply();
     }
 
     @NonNull
@@ -59,8 +72,36 @@ public class DriveBackupWorker extends Worker {
     public Result doWork() {
         Context appContext = getApplicationContext();
         SharedPreferences prefs = DriveRestHelper.getPrefs(appContext);
+
+        // 1. Automatic Email Backup (every 10 hours, zero OAuth required)
+        boolean emailEnabled = prefs.getBoolean(DriveRestHelper.KEY_EMAIL_BACKUP_ENABLED, false);
+        String emailAddress = prefs.getString(DriveRestHelper.KEY_EMAIL_BACKUP_ADDRESS, "");
+        boolean emailRetryNeeded = false;
+        if (emailEnabled && emailAddress != null && !emailAddress.trim().isEmpty()) {
+            try {
+                String emailPayload = DriveRestHelper.readEmailPayload(appContext);
+                if (emailPayload != null && !emailPayload.trim().isEmpty()) {
+                    DriveRestHelper.EmailSendResult sent = DriveRestHelper.sendBackupToEmail(
+                        emailAddress.trim(),
+                        emailPayload
+                    );
+                    prefs.edit()
+                        .putString(DriveRestHelper.KEY_EMAIL_LAST_BACKUP_AT, sent.sentAt)
+                        .putBoolean(DriveRestHelper.KEY_EMAIL_NEEDS_ACTIVATION, sent.needsActivation)
+                        .putString(DriveRestHelper.KEY_EMAIL_LAST_ERROR, "")
+                        .apply();
+                }
+            } catch (Exception emailEx) {
+                prefs.edit()
+                    .putString(DriveRestHelper.KEY_EMAIL_LAST_ERROR, emailEx.getMessage())
+                    .apply();
+                emailRetryNeeded = true;
+            }
+        }
+
+        // 2. Automatic Google Drive Backup (if connected via OAuth)
         if (!prefs.getBoolean(DriveRestHelper.KEY_ENABLED, false)) {
-            return Result.success();
+            return emailRetryNeeded ? Result.retry() : Result.success();
         }
 
         String snapshotJson;
@@ -71,7 +112,7 @@ public class DriveBackupWorker extends Worker {
             return Result.failure();
         }
         if (snapshotJson == null || snapshotJson.trim().isEmpty()) {
-            return Result.success();
+            return emailRetryNeeded ? Result.retry() : Result.success();
         }
 
         try {
@@ -92,7 +133,7 @@ public class DriveBackupWorker extends Worker {
                     .putBoolean(DriveRestHelper.KEY_NEEDS_REAUTH, true)
                     .putString(DriveRestHelper.KEY_LAST_ERROR, "AUTH_REQUIRED")
                     .apply();
-                return Result.success();
+                return emailRetryNeeded ? Result.retry() : Result.success();
             }
 
             String token = authResult.getAccessToken();
@@ -111,7 +152,7 @@ public class DriveBackupWorker extends Worker {
                 .putBoolean(DriveRestHelper.KEY_NEEDS_REAUTH, false)
                 .apply();
 
-            return Result.success();
+            return emailRetryNeeded ? Result.retry() : Result.success();
         } catch (IOException ioEx) {
             prefs.edit().putString(DriveRestHelper.KEY_LAST_ERROR, ioEx.getMessage()).apply();
             return Result.retry();

@@ -5,8 +5,18 @@ export type AccountUsageType = 'business' | 'personal';
 export interface UserAccountProfile {
   fullName: string;
   phone: string;
+  email?: string;
   usageType: AccountUsageType;
   createdAt: string;
+}
+
+export interface EmailBackupSettings {
+  enabled: boolean;
+  email: string;
+  intervalHours: number;
+  lastBackupAt?: string;
+  lastError?: string;
+  needsActivation?: boolean;
 }
 
 export interface DriveBackupSettings {
@@ -85,6 +95,7 @@ export interface AppSettings {
   accountRegistered?: boolean;
   accountSignedOut?: boolean;
   account?: UserAccountProfile;
+  emailBackup?: EmailBackupSettings;
   driveBackup?: DriveBackupSettings;
 }
 

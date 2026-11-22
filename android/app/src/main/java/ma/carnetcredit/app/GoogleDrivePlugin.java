@@ -82,13 +82,85 @@ public class GoogleDrivePlugin extends Plugin {
     @PluginMethod
     public void disconnect(PluginCall call) {
         Context ctx = getContext();
-        DriveBackupWorker.cancelPeriodicBackup(ctx);
+        SharedPreferences prefs = DriveRestHelper.getPrefs(ctx);
         DriveRestHelper.deleteSnapshot(ctx);
-        DriveRestHelper.getPrefs(ctx).edit().clear().apply();
+        prefs.edit()
+            .remove(DriveRestHelper.KEY_ENABLED)
+            .remove(DriveRestHelper.KEY_INTERVAL_HOURS)
+            .remove(DriveRestHelper.KEY_FILE_ID)
+            .remove(DriveRestHelper.KEY_ACCOUNT_EMAIL)
+            .remove(DriveRestHelper.KEY_LAST_BACKUP_AT)
+            .remove(DriveRestHelper.KEY_LAST_ERROR)
+            .remove(DriveRestHelper.KEY_NEEDS_REAUTH)
+            .apply();
+
+        boolean emailStillEnabled = prefs.getBoolean(DriveRestHelper.KEY_EMAIL_BACKUP_ENABLED, false);
+        if (!emailStillEnabled) {
+            DriveBackupWorker.cancelPeriodicBackup(ctx);
+        }
 
         JSObject ret = new JSObject();
         ret.put("connected", false);
         call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void clearAllBackups(PluginCall call) {
+        executor.execute(() -> {
+            Context ctx = getContext();
+            DriveBackupWorker.cancelPeriodicBackup(ctx);
+            DriveRestHelper.deleteSnapshot(ctx);
+            DriveRestHelper.deleteEmailPayload(ctx);
+            DriveRestHelper.getPrefs(ctx).edit().clear().apply();
+
+            JSObject ret = new JSObject();
+            ret.put("cleared", true);
+            call.resolve(ret);
+        });
+    }
+
+    @PluginMethod
+    public void sendEmailNow(PluginCall call) {
+        String email = call.getString("email", "");
+        String payloadJson = call.getString("payloadJson", "");
+        if (email == null || email.trim().isEmpty()) {
+            call.reject("INVALID_EMAIL");
+            return;
+        }
+        if (payloadJson == null || payloadJson.trim().isEmpty()) {
+            call.reject("Empty email payload");
+            return;
+        }
+
+        final String cleanEmail = email.trim();
+        executor.execute(() -> {
+            try {
+                Context ctx = getContext();
+                DriveRestHelper.writeEmailPayload(ctx, payloadJson);
+                DriveRestHelper.EmailSendResult sent = DriveRestHelper.sendBackupToEmail(
+                    cleanEmail,
+                    payloadJson
+                );
+
+                DriveRestHelper.getPrefs(ctx).edit()
+                    .putString(DriveRestHelper.KEY_EMAIL_BACKUP_ADDRESS, cleanEmail)
+                    .putString(DriveRestHelper.KEY_EMAIL_LAST_BACKUP_AT, sent.sentAt)
+                    .putBoolean(DriveRestHelper.KEY_EMAIL_NEEDS_ACTIVATION, sent.needsActivation)
+                    .putString(DriveRestHelper.KEY_EMAIL_LAST_ERROR, "")
+                    .apply();
+
+                JSObject ret = new JSObject();
+                ret.put("sentAt", sent.sentAt);
+                ret.put("email", cleanEmail);
+                ret.put("needsActivation", sent.needsActivation);
+                call.resolve(ret);
+            } catch (Exception ex) {
+                DriveRestHelper.getPrefs(getContext()).edit()
+                    .putString(DriveRestHelper.KEY_EMAIL_LAST_ERROR, ex.getMessage())
+                    .apply();
+                call.reject(ex.getMessage() != null ? ex.getMessage() : "Email backup failed");
+            }
+        });
     }
 
     @PluginMethod
@@ -115,12 +187,14 @@ public class GoogleDrivePlugin extends Plugin {
         boolean enabled = Boolean.TRUE.equals(call.getBoolean("enabled", true));
         int intervalHours = Math.max(1, call.getInt("intervalHours", DriveRestHelper.DEFAULT_INTERVAL_HOURS));
         Context ctx = getContext();
-        DriveRestHelper.getPrefs(ctx).edit()
+        SharedPreferences prefs = DriveRestHelper.getPrefs(ctx);
+        prefs.edit()
             .putBoolean(DriveRestHelper.KEY_ENABLED, enabled)
             .putInt(DriveRestHelper.KEY_INTERVAL_HOURS, intervalHours)
             .apply();
 
-        if (enabled) {
+        boolean emailEnabled = prefs.getBoolean(DriveRestHelper.KEY_EMAIL_BACKUP_ENABLED, false);
+        if (enabled || emailEnabled) {
             DriveBackupWorker.schedulePeriodicBackup(ctx, intervalHours);
         } else {
             DriveBackupWorker.cancelPeriodicBackup(ctx);
@@ -129,6 +203,66 @@ public class GoogleDrivePlugin extends Plugin {
         JSObject ret = new JSObject();
         ret.put("enabled", enabled);
         ret.put("intervalHours", intervalHours);
+        call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void configureEmailBackup(PluginCall call) {
+        boolean enabled = Boolean.TRUE.equals(call.getBoolean("enabled", false));
+        String email = call.getString("email", "");
+        int intervalHours = Math.max(1, call.getInt("intervalHours", DriveRestHelper.DEFAULT_INTERVAL_HOURS));
+        String payloadJson = call.getString("payloadJson", "");
+
+        executor.execute(() -> {
+            try {
+                Context ctx = getContext();
+                SharedPreferences prefs = DriveRestHelper.getPrefs(ctx);
+                String cleanEmail = email != null ? email.trim() : "";
+                boolean effectiveEnabled = enabled && !cleanEmail.isEmpty();
+
+                if (payloadJson != null && !payloadJson.trim().isEmpty()) {
+                    DriveRestHelper.writeEmailPayload(ctx, payloadJson);
+                } else if (!effectiveEnabled) {
+                    DriveRestHelper.deleteEmailPayload(ctx);
+                }
+
+                prefs.edit()
+                    .putBoolean(DriveRestHelper.KEY_EMAIL_BACKUP_ENABLED, effectiveEnabled)
+                    .putString(DriveRestHelper.KEY_EMAIL_BACKUP_ADDRESS, cleanEmail)
+                    .putInt(DriveRestHelper.KEY_EMAIL_INTERVAL_HOURS, intervalHours)
+                    .apply();
+
+                boolean driveEnabled = prefs.getBoolean(DriveRestHelper.KEY_ENABLED, false);
+                if (effectiveEnabled || driveEnabled) {
+                    DriveBackupWorker.schedulePeriodicBackup(ctx, intervalHours);
+                } else {
+                    DriveBackupWorker.cancelPeriodicBackup(ctx);
+                }
+
+                JSObject ret = new JSObject();
+                ret.put("enabled", effectiveEnabled);
+                ret.put("email", cleanEmail);
+                ret.put("intervalHours", intervalHours);
+                call.resolve(ret);
+            } catch (Exception ex) {
+                call.reject(ex.getMessage() != null ? ex.getMessage() : "Email backup config failed");
+            }
+        });
+    }
+
+    @PluginMethod
+    public void getEmailStatus(PluginCall call) {
+        SharedPreferences prefs = DriveRestHelper.getPrefs(getContext());
+        JSObject ret = new JSObject();
+        ret.put("enabled", prefs.getBoolean(DriveRestHelper.KEY_EMAIL_BACKUP_ENABLED, false));
+        ret.put("email", prefs.getString(DriveRestHelper.KEY_EMAIL_BACKUP_ADDRESS, ""));
+        ret.put(
+            "intervalHours",
+            prefs.getInt(DriveRestHelper.KEY_EMAIL_INTERVAL_HOURS, DriveRestHelper.DEFAULT_INTERVAL_HOURS)
+        );
+        ret.put("lastBackupAt", prefs.getString(DriveRestHelper.KEY_EMAIL_LAST_BACKUP_AT, ""));
+        ret.put("lastError", prefs.getString(DriveRestHelper.KEY_EMAIL_LAST_ERROR, ""));
+        ret.put("needsActivation", prefs.getBoolean(DriveRestHelper.KEY_EMAIL_NEEDS_ACTIVATION, false));
         call.resolve(ret);
     }
 

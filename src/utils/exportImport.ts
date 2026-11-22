@@ -23,6 +23,7 @@ import {
   parseMoneyInput,
   roundMoney,
 } from './formatters.ts';
+import { extractBackupJsonFromText } from './emailBackup.ts';
 import { computeAllLedgers, TRANSACTION_TYPE_META } from './ledgerMath.ts';
 import { isNativeApp, shareOrSaveNativeTextFile } from './nativePlatform.ts';
 import { generateId } from './storage.ts';
@@ -101,9 +102,10 @@ export function parseAndValidateBackupJSON(
   lang: AppLanguage = 'fr'
 ): ParsedBackupResult {
   const isAr = lang === 'ar';
+  const cleanedText = extractBackupJsonFromText(rawText);
   let parsed: unknown;
   try {
-    parsed = JSON.parse(rawText);
+    parsed = JSON.parse(cleanedText);
   } catch {
     throw new Error(
       isAr
@@ -293,6 +295,10 @@ export function parseAndValidateBackupJSON(
       ? {
           fullName: rawAccount.fullName.trim(),
           phone: typeof rawAccount.phone === 'string' ? rawAccount.phone.trim() : '',
+          email:
+            typeof rawAccount.email === 'string' && rawAccount.email.trim()
+              ? rawAccount.email.trim()
+              : undefined,
           usageType:
             rawAccount.usageType === 'personal'
               ? ('personal' as AccountUsageType)

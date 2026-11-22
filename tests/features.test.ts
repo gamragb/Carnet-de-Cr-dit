@@ -46,6 +46,14 @@ import {
   isDriveBackupDue,
   isValidGoogleClientId,
 } from '../src/utils/googleDriveBackup.ts';
+import {
+  buildEmailBackupPayload,
+  buildEmailSafeJSONBackup,
+  computeNextEmailBackupIso,
+  extractBackupJsonFromText,
+  isEmailBackupDue,
+  isValidEmailAddress,
+} from '../src/utils/emailBackup.ts';
 
 function makeContact(overrides: Partial<Contact> = {}): Contact {
   const now = '2025-05-01T10:00:00Z';
@@ -471,4 +479,81 @@ test('googleDriveBackup: 10-hour auto-backup scheduling, client ID validation, e
   assert.equal(normalized.settings.driveBackup?.intervalHours, 10);
   assert.equal(normalized.settings.driveBackup?.email, 'shop@gmail.com');
   assert.equal(normalized.settings.driveBackup?.fileId, 'drive-file-42');
+});
+
+test('emailBackup: 10-hour email auto-backup scheduling, email validation, payload generation & email paste extraction', () => {
+  assert.equal(isValidEmailAddress('boutique.albaraka@gmail.com'), true);
+  assert.equal(isValidEmailAddress('user+carnet@domain.ma'), true);
+  assert.equal(isValidEmailAddress('invalid-email'), false);
+  assert.equal(isValidEmailAddress('missing@tld'), false);
+
+  const baseMs = Date.parse('2026-11-22T08:00:00.000Z');
+  const nineHoursLater = baseMs + 9 * 3_600_000;
+  const tenHoursLater = baseMs + 10 * 3_600_000;
+
+  assert.equal(isEmailBackupDue(undefined, 10, baseMs), true);
+  assert.equal(isEmailBackupDue('2026-11-22T08:00:00.000Z', 10, nineHoursLater), false);
+  assert.equal(isEmailBackupDue('2026-11-22T08:00:00.000Z', 10, tenHoursLater), true);
+  assert.equal(
+    computeNextEmailBackupIso('2026-11-22T08:00:00.000Z', 10),
+    '2026-11-22T18:00:00.000Z'
+  );
+
+  const initial = createInitialDatabase('ar');
+  const dbWithEmail = {
+    ...initial,
+    contacts: [makeContact({ id: 'c1', name: 'كريم بناني', phone: '0661482390' })],
+    transactions: [makeTx({ id: 'tx1', contactId: 'c1', type: 'credit_given', amount: 1500 })],
+    settings: {
+      ...initial.settings,
+      language: 'ar' as const,
+      businessName: 'متجر البركة',
+      accountRegistered: true,
+      account: {
+        fullName: 'محمد أمين',
+        phone: '06 61 48 23 90',
+        email: 'amine@gmail.com',
+        usageType: 'business' as const,
+        createdAt: '2026-11-22T10:00:00.000Z',
+      },
+      emailBackup: {
+        enabled: true,
+        email: 'amine@gmail.com',
+        intervalHours: 10,
+      },
+    },
+  };
+
+  const payload = buildEmailBackupPayload(dbWithEmail, 'amine@gmail.com', 'ar');
+  assert.ok(payload._subject.includes('دفتر الكريدي'));
+  assert.equal(payload['البريد الإلكتروني المسجل'], 'amine@gmail.com');
+  assert.ok(payload['ملخص الأرصدة والحسابات'].includes('كريم بناني'));
+
+  // Simulate user copying the entire email message text around the JSON code block
+  const pastedEmailBody = [
+    'Subject: دفتر الكريدي — نسخة احتياطية',
+    'الحساب: محمد أمين',
+    'كود الاسترجاع الكامل:',
+    buildEmailSafeJSONBackup(dbWithEmail),
+    '--- نهاية الرسالة ---',
+  ].join('\n\n');
+
+  const extracted = extractBackupJsonFromText(pastedEmailBody);
+  const restored = parseAndValidateBackupJSON(extracted, 'ar');
+  assert.equal(restored.contacts.length, 1);
+  assert.equal(restored.transactions.length, 1);
+  assert.equal(restored.account?.email, 'amine@gmail.com');
+
+  // Direct parseAndValidateBackupJSON also accepts the raw email text directly
+  const directRestored = parseAndValidateBackupJSON(pastedEmailBody, 'ar');
+  assert.equal(directRestored.contacts[0]?.name, 'كريم بناني');
+  assert.equal(directRestored.account?.email, 'amine@gmail.com');
+
+  // Normalization infers emailBackup from account.email when registered
+  const normalized = normalizeLoadedDb(dbWithEmail);
+  assert.ok(normalized);
+  assert.equal(normalized.settings.account?.email, 'amine@gmail.com');
+  assert.equal(normalized.settings.emailBackup?.enabled, true);
+  assert.equal(normalized.settings.emailBackup?.email, 'amine@gmail.com');
+  assert.equal(normalized.settings.emailBackup?.intervalHours, 10);
 });

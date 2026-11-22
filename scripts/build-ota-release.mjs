@@ -88,7 +88,12 @@ const manifest = {
 };
 
 const manifestOutPath = path.join(releaseDir, 'update.json');
-writeFileSync(manifestOutPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+const manifestJson = `${JSON.stringify(manifest, null, 2)}\n`;
+writeFileSync(manifestOutPath, manifestJson, 'utf8');
+const distUpdatePath = path.join(distDir, 'update.json');
+if (existsSync(distDir)) {
+  writeFileSync(distUpdatePath, manifestJson, 'utf8');
+}
 
 console.log('');
 console.log('OTA release package generated successfully:');

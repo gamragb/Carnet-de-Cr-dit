@@ -57,7 +57,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
             toast.variant === 'error'
               ? 'bg-rose-600 text-white shadow-rose-900/20'
               : toast.variant === 'info'
-                ? 'bg-slate-900 text-white shadow-slate-900/20'
+                ? 'bg-slate-900 text-white shadow-slate-900/20 dark:border dark:border-slate-700 dark:bg-slate-800'
                 : 'bg-emerald-600 text-white shadow-emerald-900/20';
 
           const Icon =

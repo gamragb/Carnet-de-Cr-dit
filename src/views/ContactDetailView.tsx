@@ -121,8 +121,12 @@ export function ContactDetailView({
         return false;
       }
       const day = transaction.occurredAt.slice(0, 10);
-      if (dateFrom && day < dateFrom) return false;
-      if (dateTo && day > dateTo) return false;
+      const minDate =
+        dateFrom && dateTo && dateFrom > dateTo ? dateTo : dateFrom;
+      const maxDate =
+        dateFrom && dateTo && dateFrom > dateTo ? dateFrom : dateTo;
+      if (minDate && day < minDate) return false;
+      if (maxDate && day > maxDate) return false;
       if (q) {
         const noteMatch = transaction.note.toLowerCase().includes(q);
         const refMatch = (transaction.reference ?? '').toLowerCase().includes(q);
@@ -486,24 +490,29 @@ export function ContactDetailView({
                 ))}
               </div>
 
-              <div className="flex items-center gap-1.5 text-[11px]">
-                <input
-                  type="date"
-                  dir="ltr"
-                  aria-label={t.dateFrom}
-                  value={dateFrom}
-                  onChange={(e) => setDateFrom(e.target.value)}
-                  className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
-                />
-                <span className="text-slate-400">-</span>
-                <input
-                  type="date"
-                  dir="ltr"
-                  aria-label={t.dateTo}
-                  value={dateTo}
-                  onChange={(e) => setDateTo(e.target.value)}
-                  className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
-                />
+              <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                <label className="inline-flex items-center gap-1 text-slate-500 dark:text-slate-400">
+                  <span className="font-bold">{t.dateFrom}</span>
+                  <input
+                    type="date"
+                    dir="ltr"
+                    aria-label={t.dateFrom}
+                    value={dateFrom}
+                    onChange={(e) => setDateFrom(e.target.value)}
+                    className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                  />
+                </label>
+                <label className="inline-flex items-center gap-1 text-slate-500 dark:text-slate-400">
+                  <span className="font-bold">{t.dateTo}</span>
+                  <input
+                    type="date"
+                    dir="ltr"
+                    aria-label={t.dateTo}
+                    value={dateTo}
+                    onChange={(e) => setDateTo(e.target.value)}
+                    className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                  />
+                </label>
               </div>
             </div>
 

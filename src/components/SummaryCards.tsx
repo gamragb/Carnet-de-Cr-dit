@@ -40,7 +40,7 @@ export function SummaryCards({
   return (
     <section aria-label={t.netTitle} className="space-y-3">
       {/* Solde Net Hero Card */}
-      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-slate-900 via-slate-800 to-teal-950 p-4 text-white shadow-lg shadow-slate-900/15">
+      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-slate-900 via-slate-800 to-teal-950 p-4 text-white shadow-lg shadow-slate-900/15 ring-1 ring-white/10 dark:ring-teal-500/20">
         <div className="flex items-start justify-between gap-2">
           <div>
             <div className="flex items-center gap-1.5 text-xs font-medium text-slate-300">
@@ -71,10 +71,14 @@ export function SummaryCards({
 
         {/* Balance proportion bar */}
         <div className="mt-3.5">
-          <div className="h-2 w-full overflow-hidden rounded-full bg-rose-500/40">
+          <div
+            className={`h-2 w-full overflow-hidden rounded-full ${
+              totalVolume === 0 ? 'bg-white/15' : 'bg-rose-500/40'
+            }`}
+          >
             <div
               className="h-full rounded-full bg-emerald-400 transition-all duration-500"
-              style={{ width: `${totalVolume === 0 ? 50 : receivableRatio}%` }}
+              style={{ width: `${totalVolume === 0 ? 0 : receivableRatio}%` }}
             />
           </div>
           <div className="mt-1.5 flex items-center justify-between text-[11px] text-slate-300">

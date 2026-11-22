@@ -10,12 +10,14 @@ import type {
   Contact,
   ContactCategory,
   DriveBackupSettings,
+  EmailBackupSettings,
   LedgerDatabase,
   PaymentMethod,
   Transaction,
   TransactionType,
   UserAccountProfile,
 } from '../types/ledger.ts';
+import { EMAIL_AUTO_BACKUP_INTERVAL_HOURS } from './emailBackup.ts';
 import { roundMoney } from './formatters.ts';
 
 const LS_KEY = 'carnet_credit_maroc_v1';
@@ -47,6 +49,12 @@ const VALID_METHODS = new Set<PaymentMethod>([
   'Marchandise',
 ]);
 
+export const DEFAULT_EMAIL_BACKUP: EmailBackupSettings = {
+  enabled: false,
+  email: '',
+  intervalHours: EMAIL_AUTO_BACKUP_INTERVAL_HOURS,
+};
+
 export const DEFAULT_DRIVE_BACKUP: DriveBackupSettings = {
   enabled: false,
   connected: false,
@@ -72,6 +80,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   updateManifestUrl: DEFAULT_UPDATE_MANIFEST_URL,
   accountRegistered: false,
   accountSignedOut: false,
+  emailBackup: { ...DEFAULT_EMAIL_BACKUP },
   driveBackup: { ...DEFAULT_DRIVE_BACKUP },
 };
 
@@ -335,6 +344,10 @@ export function normalizeLoadedDb(raw: unknown): LedgerDatabase | null {
       ? {
           fullName: rawAccount.fullName.trim(),
           phone: typeof rawAccount.phone === 'string' ? rawAccount.phone.trim() : '',
+          email:
+            typeof rawAccount.email === 'string' && rawAccount.email.trim()
+              ? rawAccount.email.trim()
+              : undefined,
           usageType:
             rawAccount.usageType === 'personal'
               ? ('personal' as AccountUsageType)
@@ -353,6 +366,39 @@ export function normalizeLoadedDb(raw: unknown): LedgerDatabase | null {
             (typeof rawSettings.businessName === 'string' && rawSettings.businessName.trim()) ||
             (rawSettings.pinEnabled && rawSettings.pinHash)
         );
+
+  const rawEmailBackup =
+    rawSettings.emailBackup && typeof rawSettings.emailBackup === 'object'
+      ? (rawSettings.emailBackup as Partial<EmailBackupSettings>)
+      : undefined;
+
+  const resolvedEmailAddr =
+    typeof rawEmailBackup?.email === 'string' && rawEmailBackup.email.trim()
+      ? rawEmailBackup.email.trim()
+      : account?.email ?? '';
+
+  const emailBackup: EmailBackupSettings = {
+    enabled:
+      typeof rawEmailBackup?.enabled === 'boolean'
+        ? Boolean(rawEmailBackup.enabled && resolvedEmailAddr)
+        : Boolean(resolvedEmailAddr),
+    email: resolvedEmailAddr,
+    intervalHours:
+      typeof rawEmailBackup?.intervalHours === 'number' &&
+      Number.isFinite(rawEmailBackup.intervalHours) &&
+      rawEmailBackup.intervalHours >= 1
+        ? Math.round(rawEmailBackup.intervalHours)
+        : EMAIL_AUTO_BACKUP_INTERVAL_HOURS,
+    lastBackupAt:
+      typeof rawEmailBackup?.lastBackupAt === 'string' && rawEmailBackup.lastBackupAt.trim()
+        ? rawEmailBackup.lastBackupAt.trim()
+        : undefined,
+    lastError:
+      typeof rawEmailBackup?.lastError === 'string' && rawEmailBackup.lastError.trim()
+        ? rawEmailBackup.lastError.trim()
+        : undefined,
+    needsActivation: Boolean(rawEmailBackup?.needsActivation),
+  };
 
   const rawDrive =
     rawSettings.driveBackup && typeof rawSettings.driveBackup === 'object'
@@ -423,6 +469,7 @@ export function normalizeLoadedDb(raw: unknown): LedgerDatabase | null {
     accountRegistered: inferredRegistered,
     accountSignedOut: Boolean(inferredRegistered && rawSettings.accountSignedOut),
     account,
+    emailBackup,
     driveBackup,
   };
 

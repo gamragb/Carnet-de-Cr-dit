@@ -1,3 +1,4 @@
+import { Capacitor, registerPlugin } from '@capacitor/core';
 import {
   DEFAULT_GOOGLE_WEB_CLIENT_ID,
   DRIVE_AUTO_BACKUP_INTERVAL_HOURS,
@@ -5,6 +6,7 @@ import {
   DRIVE_BACKUP_FOLDER_NAME,
   DRIVE_FILE_SCOPE,
 } from '../config/driveConfig.ts';
+import { APP_VERSION } from '../config/updateConfig.ts';
 import type { AppLanguage } from '../types/ledger.ts';
 import { isNativeApp } from './nativePlatform.ts';
 
@@ -80,7 +82,6 @@ async function getNativePlugin(): Promise<NativeGoogleDrivePlugin | null> {
   if (!isNativeApp()) return null;
   if (cachedNativePlugin) return cachedNativePlugin;
   try {
-    const { Capacitor, registerPlugin } = await import('@capacitor/core');
     if (!Capacitor.isPluginAvailable('GoogleDriveBackup')) {
       return null;
     }
@@ -149,8 +150,8 @@ export function formatDriveError(err: unknown, lang: AppLanguage): string {
   }
   if (raw.includes('NATIVE_PLUGIN_UPDATE_REQUIRED')) {
     return isAr
-      ? 'يرجى تثبيت أحدث ملف APK (v1.1.0) لتفعيل النسخ التلقائي على Google Drive.'
-      : 'Installez la dernière version APK (v1.1.0) pour activer Google Drive sur Android.';
+      ? `يرجى تثبيت أحدث ملف APK (v${APP_VERSION}) لتفعيل النسخ التلقائي على Google Drive.`
+      : `Installez la dernière version APK (v${APP_VERSION}) pour activer Google Drive sur Android.`;
   }
   if (
     raw.includes('Developer Console') ||

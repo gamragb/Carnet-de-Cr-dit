@@ -185,10 +185,20 @@ export function AnalyticsPanel({
               </div>
               <div className="flex items-center gap-3 font-bold">
                 <span dir="ltr" className="tabular-nums text-emerald-700 dark:text-emerald-400">
-                  +{formatMAD(cat.receivable, { masked: hideAmounts, hideDecimals, lang })}
+                  {formatMAD(cat.receivable, {
+                    showSign: cat.receivable > 0,
+                    masked: hideAmounts,
+                    hideDecimals,
+                    lang,
+                  })}
                 </span>
                 <span dir="ltr" className="tabular-nums text-rose-700 dark:text-rose-400">
-                  -{formatMAD(cat.payable, { masked: hideAmounts, hideDecimals, lang })}
+                  {formatMAD(-cat.payable, {
+                    showSign: cat.payable > 0,
+                    masked: hideAmounts,
+                    hideDecimals,
+                    lang,
+                  })}
                 </span>
               </div>
             </div>

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'carnet-credit-v10';
+const CACHE_NAME = 'carnet-credit-v13';
 const APP_SHELL = [
   './',
   './index.html',
@@ -40,6 +40,14 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
+
+  // Never cache OTA update manifests or zip bundles so version checks stay fresh
+  if (
+    url.pathname.endsWith('/update.json') ||
+    /\/bundle-[^/]+\.zip$/i.test(url.pathname)
+  ) {
+    return;
+  }
 
   if (event.request.mode === 'navigate') {
     event.respondWith(

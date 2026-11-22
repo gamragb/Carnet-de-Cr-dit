@@ -488,6 +488,10 @@ export const UI_TEXT = {
       accountFullNameError: 'Veuillez saisir votre nom complet (min. 2 caractères).',
       accountPhoneLabel: 'Téléphone (optionnel)',
       accountPhonePlaceholder: 'Ex : 06 61 48 23 90',
+      accountEmailLabel: 'Adresse email (sauvegarde auto toutes les 10 h)',
+      accountEmailPlaceholder: 'Ex : exemple@gmail.com',
+      accountEmailHint:
+        'Enregistrez votre email pour recevoir automatiquement une copie de votre carnet toutes les 10 heures.',
       accountUsageLabel: "Type d'utilisation",
       accountUsageBusiness: 'Commerce / Pro',
       accountUsagePersonal: 'Personnel',
@@ -535,6 +539,33 @@ export const UI_TEXT = {
       driveBackedUpToast: 'Sauvegarde enregistrée sur Google Drive !',
       driveScheduleEnabledToast: 'Sauvegarde automatique Google Drive (10 h) activée.',
       driveScheduleDisabledToast: 'Sauvegarde automatique Google Drive mise en pause.',
+      emailBackupTitle: 'Sauvegarde auto par Email (10 h)',
+      emailBackupSubtitle: (hours: number) =>
+        `Envoi automatique d’une copie vers votre boîte mail toutes les ${hours} heures`,
+      emailBackupActiveBadge: 'Actif (10 h)',
+      emailBackupInactiveBadge: 'Inactif',
+      emailBackupInputLabel: 'Votre adresse email de sauvegarde',
+      emailBackupSaveBtn: 'Enregistrer',
+      emailBackupToggleTitle: (hours: number) =>
+        `Envoyer une copie à mon email toutes les ${hours} h`,
+      emailBackupToggleDesc:
+        'Envoie un récapitulatif complet de vos comptes + le code de restauration dans votre boîte mail',
+      emailBackupSendNowBtn: 'Envoyer à mon email',
+      emailBackupSendingBtn: 'Envoi en cours...',
+      emailBackupPasteRestoreBtn: 'Restaurer depuis email',
+      emailBackupLastSentLabel: (date: string) => `Dernière copie envoyée : ${date}`,
+      emailBackupNeverSent: 'Aucune copie envoyée par email pour le moment.',
+      emailBackupNextLabel: (date: string) => `Prochaine copie auto : ${date}`,
+      emailBackupActivationHint: (email: string) =>
+        `Activation (1 seule fois) : ouvrez votre boîte mail (${email}) et cliquez sur « Activate » dans l’email de confirmation pour recevoir vos copies automatiques toutes les 10 h.`,
+      emailBackupSavedToast: (email: string) =>
+        `Email enregistré (${email}) — sauvegarde auto toutes les 10 h activée !`,
+      emailBackupSentToast: (email: string) =>
+        `Copie de sauvegarde envoyée à ${email} !`,
+      emailBackupActivationToast: (email: string) =>
+        `Lien d'activation envoyé à ${email} : ouvrez votre boîte mail et cliquez sur « Activate ».`,
+      emailBackupEnabledToast: 'Sauvegarde automatique par email (10 h) activée.',
+      emailBackupDisabledToast: 'Sauvegarde automatique par email mise en pause.',
     },
     onboarding: {
       badge: 'Nouveau compte',
@@ -553,6 +584,19 @@ export const UI_TEXT = {
       phonePlaceholder: 'Ex : 06 61 48 23 90',
       phoneInvalidError:
         'Numéro invalide : saisissez un numéro marocain à 10 chiffres (06/07/05...) ou laissez vide.',
+      emailLabel: 'Votre email (sauvegarde automatique toutes les 10 h)',
+      emailPlaceholder: 'Ex : exemple@gmail.com',
+      emailHint:
+        'Une copie de votre carnet sera envoyée automatiquement à cet email toutes les 10 heures pour rester stockée dans votre boîte mail.',
+      emailInvalidError:
+        'Adresse email invalide : saisissez un email valide (ex : nom@gmail.com) ou laissez vide.',
+      restoreEmailPasteBtn: 'Restaurer une copie reçue par email (coller)',
+      pasteEmailModalTitle: 'Restaurer une copie depuis votre email',
+      pasteEmailModalDesc:
+        'Ouvrez l’email de sauvegarde dans votre boîte mail, copiez son contenu (ou le code JSON) et collez-le ci-dessous :',
+      pasteEmailPlaceholder: 'Collez ici le contenu ou le code JSON de l’email...',
+      pasteEmailSubmitBtn: 'Restaurer mon carnet',
+      autoEmailBadge: 'Sauvegarde email auto • 10 h',
       pinToggleTitle: 'Protéger par code PIN (4 chiffres)',
       pinToggleDesc: 'Recommandé pour verrouiller vos comptes à l’ouverture',
       pinLabel: 'Code PIN (4 chiffres) *',
@@ -1086,6 +1130,10 @@ export const UI_TEXT = {
       accountFullNameError: 'المرجو إدخال الاسم الكامل (حرفين على الأقل).',
       accountPhoneLabel: 'رقم الهاتف (اختياري)',
       accountPhonePlaceholder: 'مثال: 06 61 48 23 90',
+      accountEmailLabel: 'البريد الإلكتروني (حفظ نسخة تلقائية كل 10 ساعات)',
+      accountEmailPlaceholder: 'مثال: exemple@gmail.com',
+      accountEmailHint:
+        'سجّل بريدك الإلكتروني لترسل إليه تلقائياً نسخة من حساباتك كل 10 ساعات وتبقى مخزنة فيه.',
       accountUsageLabel: 'نوع الحساب',
       accountUsageBusiness: 'تجاري / محل',
       accountUsagePersonal: 'شخصي',
@@ -1133,6 +1181,33 @@ export const UI_TEXT = {
       driveBackedUpToast: 'تم حفظ النسخة الاحتياطية على Google Drive بنجاح!',
       driveScheduleEnabledToast: 'تم تفعيل النسخ التلقائي على Google Drive كل 10 ساعات.',
       driveScheduleDisabledToast: 'تم إيقاف النسخ التلقائي مؤقتاً.',
+      emailBackupTitle: 'النسخ التلقائي إلى البريد الإلكتروني (كل 10 ساعات)',
+      emailBackupSubtitle: (hours: number) =>
+        `إرسال نسخة من دفترك تلقائياً إلى الإيميل كل ${hours} ساعات لتبقى مخزنة فيه`,
+      emailBackupActiveBadge: 'مفعّل (10 س)',
+      emailBackupInactiveBadge: 'غير مفعّل',
+      emailBackupInputLabel: 'بريدك الإلكتروني لاستلام النسخ الاحتياطية',
+      emailBackupSaveBtn: 'حفظ الإيميل',
+      emailBackupToggleTitle: (hours: number) =>
+        `إرسال نسخة تلقائية للإيميل كل ${hours} ساعات`,
+      emailBackupToggleDesc:
+        'يرسل ملخصاً كاملاً لحساباتك وأرصدتك مع كود الاسترجاع إلى بريدك الإلكتروني ليبقى محفوظاً هناك',
+      emailBackupSendNowBtn: 'إرسال نسخة للإيميل الآن',
+      emailBackupSendingBtn: 'جاري الإرسال...',
+      emailBackupPasteRestoreBtn: 'استرجاع نسخة من الإيميل',
+      emailBackupLastSentLabel: (date: string) => `آخر نسخة أُرسلت للإيميل: ${date}`,
+      emailBackupNeverSent: 'لم يتم إرسال أي نسخة إلى البريد الإلكتروني بعد.',
+      emailBackupNextLabel: (date: string) => `النسخة التلقائية القادمة: ${date}`,
+      emailBackupActivationHint: (email: string) =>
+        `تفعيل لمرة واحدة فقط: افتح بريدك الإلكتروني (${email}) واضغط على زر « Activate » في رسالة التأكيد لتفعيل وصول النسخ التلقائية كل 10 ساعات.`,
+      emailBackupSavedToast: (email: string) =>
+        `تم تسجيل الإيميل (${email}) وتفعيل إرسال نسخة تلقائية كل 10 ساعات!`,
+      emailBackupSentToast: (email: string) =>
+        `تم إرسال نسخة احتياطية إلى ${email} بنجاح!`,
+      emailBackupActivationToast: (email: string) =>
+        `تم إرسال رسالة التفعيل إلى ${email}: افتح بريدك واضغط على Activate مرة واحدة.`,
+      emailBackupEnabledToast: 'تم تفعيل النسخ التلقائي إلى البريد الإلكتروني كل 10 ساعات.',
+      emailBackupDisabledToast: 'تم إيقاف النسخ التلقائي إلى البريد الإلكتروني مؤقتاً.',
     },
     onboarding: {
       badge: 'حساب جديد',
@@ -1151,6 +1226,19 @@ export const UI_TEXT = {
       phonePlaceholder: 'مثال: 06 61 48 23 90',
       phoneInvalidError:
         'رقم غير صالح: أدخل رقماً مغربياً من 10 أرقام (06/07/05...) أو اتركه فارغاً.',
+      emailLabel: 'بريدك الإلكتروني (حفظ نسخة تلقائية كل 10 ساعات)',
+      emailPlaceholder: 'مثال: exemple@gmail.com',
+      emailHint:
+        'ستصل نسخة من دفترك وحساباتك تلقائياً إلى هذا الإيميل كل 10 ساعات لتبقى مخزنة لديك بأمان.',
+      emailInvalidError:
+        'بريد إلكتروني غير صالح: أدخل إيميلاً صحيحاً (مثال: name@gmail.com) أو اتركه فارغاً.',
+      restoreEmailPasteBtn: 'استرجاع نسخة من البريد الإلكتروني (لصق الكود)',
+      pasteEmailModalTitle: 'استرجاع نسخة احتياطية من البريد الإلكتروني',
+      pasteEmailModalDesc:
+        'افتح رسالة النسخة الاحتياطية في بريدك الإلكتروني، انسخ محتوى الرسالة (أو كود JSON) والصقه في الخانة أسفله:',
+      pasteEmailPlaceholder: 'الصق هنا نص الرسالة أو كود JSON من بريدك الإلكتروني...',
+      pasteEmailSubmitBtn: 'استرجاع الحساب والبيانات',
+      autoEmailBadge: 'نسخ تلقائي للإيميل • 10 س',
       pinToggleTitle: 'حماية الحساب برمز سري PIN (4 أرقام)',
       pinToggleDesc: 'يُنصح به لقفل الدفتر عند فتح التطبيق',
       pinLabel: 'الرمز السري PIN (4 أرقام) *',

@@ -71,6 +71,20 @@ export function PinLockScreen({
   const [confirmWipe, setConfirmWipe] = useState(false);
 
   useEffect(() => {
+    const onAndroidBack = (ev: Event) => {
+      if (confirmWipe) {
+        ev.preventDefault();
+        setConfirmWipe(false);
+      } else if (recoveryOpen) {
+        ev.preventDefault();
+        setRecoveryOpen(false);
+      }
+    };
+    window.addEventListener('carnet:android-back', onAndroidBack);
+    return () => window.removeEventListener('carnet:android-back', onAndroidBack);
+  }, [confirmWipe, recoveryOpen]);
+
+  useEffect(() => {
     const tick = () => {
       const secs = Math.max(0, Math.ceil((guard.lockedUntil - Date.now()) / 1000));
       setRemainingSec(secs);
@@ -142,7 +156,10 @@ export function PinLockScreen({
   const isCooldown = remainingSec > 0;
 
   return (
-    <div className="no-print fixed inset-0 z-50 flex flex-col items-center justify-between bg-slate-950 px-6 py-8 text-white">
+    <div
+      dir={lang === 'ar' ? 'rtl' : 'ltr'}
+      className="no-print fixed inset-0 z-50 flex flex-col items-center justify-between bg-slate-950 px-6 py-8 text-white"
+    >
       <div className="mt-4 flex flex-col items-center text-center">
         <div className="flex h-16 w-16 items-center justify-center rounded-3xl bg-teal-500/20 text-teal-300 ring-1 ring-teal-400/30">
           <Lock className="h-8 w-8" />

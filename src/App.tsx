@@ -56,6 +56,17 @@ import {
   type ParsedBackupResult,
 } from './utils/exportImport.ts';
 import {
+  EMAIL_AUTO_BACKUP_INTERVAL_HOURS,
+  buildEmailBackupPayload,
+  clearAllNativeBackups,
+  formatEmailBackupError,
+  getNativeEmailBackupStatus,
+  isEmailBackupDue,
+  isValidEmailAddress,
+  sendBackupToEmail,
+  syncNativeEmailBackupConfig,
+} from './utils/emailBackup.ts';
+import {
   backupToGoogleDrive,
   configureNativeDriveSchedule,
   connectGoogleDrive,
@@ -126,6 +137,7 @@ function LedgerApp() {
   );
 
   const [runningVersion, setRunningVersion] = useState<string>(APP_VERSION);
+  const [versionResolved, setVersionResolved] = useState<boolean>(() => !isNativeApp());
   const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult | null>(null);
   const [updateChecking, setUpdateChecking] = useState(false);
   const [updateInstalling, setUpdateInstalling] = useState(false);
@@ -137,6 +149,9 @@ function LedgerApp() {
     'idle' | 'connecting' | 'backing_up' | 'restoring'
   >('idle');
   const driveAutoRunningRef = useRef(false);
+
+  const [emailBackupBusy, setEmailBackupBusy] = useState(false);
+  const emailAutoRunningRef = useRef(false);
 
   const [deleteContactTarget, setDeleteContactTarget] = useState<Contact | null>(null);
   const [deleteTxTarget, setDeleteTxTarget] = useState<Transaction | null>(null);
@@ -158,11 +173,12 @@ function LedgerApp() {
     []
   );
 
-  // Sync HTML lang, dir, dark mode class & mobile browser theme-color
+  // Sync HTML lang, dir, document title, dark mode class & mobile browser theme-color
   useEffect(() => {
     document.documentElement.lang = lang;
     document.documentElement.dir = lang === 'ar' ? 'rtl' : 'ltr';
-  }, [lang]);
+    document.title = `${t.appName} — ${t.appSubtitleDefault}`;
+  }, [lang, t.appName, t.appSubtitleDefault]);
 
   useEffect(() => {
     const isDark = theme === 'dark';
@@ -226,7 +242,9 @@ function LedgerApp() {
   // Service Worker update notification listener & Capacitor OTA ready signal
   useEffect(() => {
     void notifyNativeAppReady();
-    void getRunningAppVersion().then((v) => setRunningVersion(v));
+    void getRunningAppVersion()
+      .then((v) => setRunningVersion(v))
+      .finally(() => setVersionResolved(true));
 
     const handler = (ev: Event) => {
       const custom = ev as CustomEvent<ServiceWorkerRegistration>;
@@ -241,7 +259,15 @@ function LedgerApp() {
   // Android hardware back button handling inside Capacitor shell
   const backHandlerRef = useRef<() => void>(() => {});
   backHandlerRef.current = () => {
-    if (logoutConfirmOpen) {
+    const backEv = new CustomEvent('carnet:android-back', { cancelable: true });
+    window.dispatchEvent(backEv);
+    if (backEv.defaultPrevented) {
+      return;
+    }
+
+    if (forcePinRecoveryScreen) {
+      setForcePinRecoveryScreen(false);
+    } else if (logoutConfirmOpen) {
       setLogoutConfirmOpen(false);
     } else if (deleteTxTarget) {
       setDeleteTxTarget(null);
@@ -771,6 +797,7 @@ function LedgerApp() {
 
   const handleEmergencyResetData = () => {
     void disconnectGoogleDrive();
+    void clearAllNativeBackups();
     const fresh = createInitialDatabase(lang);
     const resetDb: LedgerDatabase = {
       ...fresh,
@@ -802,16 +829,20 @@ function LedgerApp() {
     }
 
     if (db.settings.accountRegistered) {
+      await clearAllNativeBackups();
       void disconnectGoogleDrive();
     }
 
-    updateDb((prev) => ({
-      ...prev,
+    const cleanEmail = payload.email.trim();
+    const hasEmail = isValidEmailAddress(cleanEmail);
+
+    const nextDb: LedgerDatabase = {
+      ...dbRef.current,
       initialized: true,
       contacts: [],
       transactions: [],
       settings: {
-        ...prev.settings,
+        ...dbRef.current.settings,
         language: payload.language,
         businessName: payload.businessName,
         accountRegistered: true,
@@ -819,6 +850,7 @@ function LedgerApp() {
         account: {
           fullName: payload.fullName,
           phone: payload.phone,
+          email: hasEmail ? cleanEmail : undefined,
           usageType: payload.usageType,
           createdAt: now,
         },
@@ -826,15 +858,23 @@ function LedgerApp() {
         pinHash,
         pinRecoveryQuestion: payload.recovery?.question ?? '',
         pinRecoveryHash: recoveryHash,
+        emailBackup: {
+          enabled: hasEmail,
+          email: hasEmail ? cleanEmail : '',
+          intervalHours: EMAIL_AUTO_BACKUP_INTERVAL_HOURS,
+        },
         driveBackup: {
           enabled: false,
           connected: false,
           email: '',
           intervalHours: DRIVE_AUTO_BACKUP_INTERVAL_HOURS,
-          webClientId: prev.settings.driveBackup?.webClientId ?? DEFAULT_GOOGLE_WEB_CLIENT_ID,
+          webClientId:
+            dbRef.current.settings.driveBackup?.webClientId ?? DEFAULT_GOOGLE_WEB_CLIENT_ID,
         },
       },
-    }));
+    };
+
+    updateDb(nextDb);
 
     lastActivityRef.current = Date.now();
     setForcePinRecoveryScreen(false);
@@ -842,6 +882,44 @@ function LedgerApp() {
     setActiveTab('dashboard');
     setIsUnlocked(true);
     showToast(UI_TEXT[payload.language].toasts.accountCreated(payload.fullName));
+
+    if (hasEmail) {
+      void sendBackupToEmail({
+        db: nextDb,
+        email: cleanEmail,
+        lang: payload.language,
+      })
+        .then((res) => {
+          updateDb((prev) => ({
+            ...prev,
+            settings: {
+              ...prev.settings,
+              lastBackupAt: res.sentAt,
+              emailBackup: {
+                ...(prev.settings.emailBackup ?? {
+                  enabled: true,
+                  email: res.email,
+                  intervalHours: EMAIL_AUTO_BACKUP_INTERVAL_HOURS,
+                }),
+                enabled: true,
+                email: res.email,
+                lastBackupAt: res.sentAt,
+                needsActivation: res.needsActivation,
+                lastError: undefined,
+              },
+            },
+          }));
+          if (res.needsActivation) {
+            showToast(
+              UI_TEXT[payload.language].settingsView.emailBackupActivationToast(res.email),
+              'info'
+            );
+          }
+        })
+        .catch(() => {
+          // Will retry automatically on schedule / online
+        });
+    }
   };
 
   const handleConfirmLogout = () => {
@@ -882,6 +960,13 @@ function LedgerApp() {
   ) => {
     const now = new Date().toISOString();
     const targetLang = payload.language ?? lang;
+    const restoredEmail = (
+      payload.account?.email ||
+      driveMeta?.email ||
+      ''
+    ).trim();
+    const hasRestoredEmail = isValidEmailAddress(restoredEmail);
+
     updateDb((prev) => ({
       ...prev,
       initialized: true,
@@ -897,6 +982,7 @@ function LedgerApp() {
             ? {
                 fullName: payload.businessName,
                 phone: '',
+                email: hasRestoredEmail ? restoredEmail : undefined,
                 usageType: 'business',
                 createdAt: now,
               }
@@ -906,6 +992,18 @@ function LedgerApp() {
         hideDecimals: payload.hideDecimals ?? prev.settings.hideDecimals,
         csvDelimiter: payload.csvDelimiter ?? prev.settings.csvDelimiter,
         whatsAppTemplate: payload.whatsAppTemplate ?? prev.settings.whatsAppTemplate,
+        emailBackup: hasRestoredEmail
+          ? {
+              ...(prev.settings.emailBackup ?? {
+                enabled: true,
+                email: restoredEmail,
+                intervalHours: EMAIL_AUTO_BACKUP_INTERVAL_HOURS,
+              }),
+              enabled: true,
+              email: restoredEmail,
+              intervalHours: EMAIL_AUTO_BACKUP_INTERVAL_HOURS,
+            }
+          : prev.settings.emailBackup,
         driveBackup: driveMeta
           ? {
               ...(prev.settings.driveBackup ?? {
@@ -943,29 +1041,63 @@ function LedgerApp() {
   const handleUpdateAccountProfile = (data: {
     fullName: string;
     phone: string;
+    email: string;
     businessName: string;
     usageType: AccountUsageType;
   }) => {
     const now = new Date().toISOString();
-    updateDb((prev) => ({
-      ...prev,
+    const cleanEmail = data.email.trim();
+    const hasValidEmail = isValidEmailAddress(cleanEmail);
+    const prevDb = dbRef.current;
+    const prevEmail = (
+      prevDb.settings.emailBackup?.email ||
+      prevDb.settings.account?.email ||
+      ''
+    ).trim();
+
+    const nextDb: LedgerDatabase = {
+      ...prevDb,
       settings: {
-        ...prev.settings,
+        ...prevDb.settings,
         businessName: data.businessName,
         accountRegistered: true,
         account: {
           fullName: data.fullName,
           phone: data.phone,
+          email: hasValidEmail ? cleanEmail : undefined,
           usageType: data.usageType,
-          createdAt: prev.settings.account?.createdAt ?? now,
+          createdAt: prevDb.settings.account?.createdAt ?? now,
         },
+        emailBackup: hasValidEmail
+          ? {
+              ...(prevDb.settings.emailBackup ?? {
+                enabled: true,
+                email: cleanEmail,
+                intervalHours: EMAIL_AUTO_BACKUP_INTERVAL_HOURS,
+              }),
+              enabled: true,
+              email: cleanEmail,
+              intervalHours:
+                prevDb.settings.emailBackup?.intervalHours ||
+                EMAIL_AUTO_BACKUP_INTERVAL_HOURS,
+            }
+          : prevDb.settings.emailBackup
+            ? { ...prevDb.settings.emailBackup, enabled: false, email: '' }
+            : undefined,
       },
-    }));
+    };
+
+    updateDb(nextDb);
     showToast(t.toasts.accountUpdated);
+
+    if (hasValidEmail && cleanEmail.toLowerCase() !== prevEmail.toLowerCase()) {
+      void handleSendEmailBackupNow(cleanEmail, nextDb);
+    }
   };
 
   const handleResetAccount = () => {
     void disconnectGoogleDrive();
+    void clearAllNativeBackups();
     const fresh = createInitialDatabase(lang);
     const resetDb: LedgerDatabase = {
       ...fresh,
@@ -1022,6 +1154,9 @@ function LedgerApp() {
       return;
     }
 
+    const restoredEmail = (payload.account?.email ?? '').trim();
+    const hasRestoredEmail = isValidEmailAddress(restoredEmail);
+
     updateDb((prev) => ({
       ...prev,
       initialized: true,
@@ -1037,6 +1172,18 @@ function LedgerApp() {
         hideDecimals: payload.hideDecimals ?? prev.settings.hideDecimals,
         csvDelimiter: payload.csvDelimiter ?? prev.settings.csvDelimiter,
         whatsAppTemplate: payload.whatsAppTemplate ?? prev.settings.whatsAppTemplate,
+        emailBackup: hasRestoredEmail
+          ? {
+              ...(prev.settings.emailBackup ?? {
+                enabled: true,
+                email: restoredEmail,
+                intervalHours: EMAIL_AUTO_BACKUP_INTERVAL_HOURS,
+              }),
+              enabled: true,
+              email: restoredEmail,
+              intervalHours: EMAIL_AUTO_BACKUP_INTERVAL_HOURS,
+            }
+          : prev.settings.emailBackup,
       },
     }));
     setSelectedContactId(null);
@@ -1189,7 +1336,7 @@ function LedgerApp() {
       return;
     }
 
-    if (updateInfo.externalUrl) {
+    if (updateInfo.installMode === 'external' && updateInfo.externalUrl) {
       window.open(updateInfo.externalUrl, '_blank', 'noopener,noreferrer');
       return;
     }
@@ -1199,12 +1346,24 @@ function LedgerApp() {
       return;
     }
 
+    if ('serviceWorker' in navigator) {
+      try {
+        const reg = await navigator.serviceWorker.getRegistration();
+        await reg?.update();
+        if (reg?.waiting) {
+          reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+        }
+      } catch {
+        // Ignore SW update errors before reload
+      }
+    }
+
     window.location.reload();
   };
 
   // Silent automatic OTA check once on startup when online & manifest URL configured
   useEffect(() => {
-    if (!idbHydrated || autoCheckedRef.current) return;
+    if (!idbHydrated || !versionResolved || autoCheckedRef.current) return;
     const configuredUrl = (
       db.settings.updateManifestUrl || DEFAULT_UPDATE_MANIFEST_URL
     ).trim();
@@ -1213,10 +1372,310 @@ function LedgerApp() {
 
     autoCheckedRef.current = true;
     void handleCheckForUpdates(true, configuredUrl);
-  }, [idbHydrated, db.settings.updateManifestUrl, handleCheckForUpdates]);
+  }, [idbHydrated, versionResolved, db.settings.updateManifestUrl, handleCheckForUpdates]);
 
   const dbRef = useRef(db);
   dbRef.current = db;
+
+  const handleSendEmailBackupNow = async (
+    overrideEmail?: string,
+    overrideDb?: LedgerDatabase
+  ) => {
+    if (emailBackupBusy) return;
+    const currentDb = overrideDb ?? dbRef.current;
+    const targetEmail = (
+      overrideEmail ||
+      currentDb.settings.emailBackup?.email ||
+      currentDb.settings.account?.email ||
+      ''
+    ).trim();
+
+    if (!isValidEmailAddress(targetEmail)) {
+      showToast(t.onboarding.emailInvalidError, 'error');
+      return;
+    }
+
+    setEmailBackupBusy(true);
+    try {
+      const res = await sendBackupToEmail({
+        db: currentDb,
+        email: targetEmail,
+        lang,
+      });
+
+      const intervalHours =
+        currentDb.settings.emailBackup?.intervalHours ||
+        EMAIL_AUTO_BACKUP_INTERVAL_HOURS;
+
+      updateDb((prev) => ({
+        ...prev,
+        settings: {
+          ...prev.settings,
+          lastBackupAt: res.sentAt,
+          account: prev.settings.account
+            ? { ...prev.settings.account, email: res.email }
+            : prev.settings.account,
+          emailBackup: {
+            ...(prev.settings.emailBackup ?? {
+              enabled: true,
+              email: res.email,
+              intervalHours,
+            }),
+            enabled: true,
+            email: res.email,
+            intervalHours,
+            lastBackupAt: res.sentAt,
+            needsActivation: res.needsActivation,
+            lastError: undefined,
+          },
+        },
+      }));
+      setBackupReminderDismissed(true);
+      if (res.needsActivation) {
+        showToast(t.settingsView.emailBackupActivationToast(res.email), 'info');
+      } else {
+        showToast(t.settingsView.emailBackupSentToast(res.email));
+      }
+    } catch (err) {
+      const msg = formatEmailBackupError(err, lang);
+      updateDb((prev) => ({
+        ...prev,
+        settings: {
+          ...prev.settings,
+          emailBackup: prev.settings.emailBackup
+            ? { ...prev.settings.emailBackup, lastError: msg }
+            : prev.settings.emailBackup,
+        },
+      }));
+      showToast(msg, 'error');
+    } finally {
+      setEmailBackupBusy(false);
+    }
+  };
+
+  const handleSaveEmailBackupAddress = (emailAddr: string) => {
+    const cleaned = emailAddr.trim();
+    if (!isValidEmailAddress(cleaned)) {
+      showToast(t.onboarding.emailInvalidError, 'error');
+      return;
+    }
+    const prevDb = dbRef.current;
+    const intervalHours =
+      prevDb.settings.emailBackup?.intervalHours ||
+      EMAIL_AUTO_BACKUP_INTERVAL_HOURS;
+
+    const nextDb: LedgerDatabase = {
+      ...prevDb,
+      settings: {
+        ...prevDb.settings,
+        account: prevDb.settings.account
+          ? { ...prevDb.settings.account, email: cleaned }
+          : prevDb.settings.account,
+        emailBackup: {
+          ...(prevDb.settings.emailBackup ?? {
+            enabled: true,
+            email: cleaned,
+            intervalHours,
+          }),
+          enabled: true,
+          email: cleaned,
+          intervalHours,
+          lastError: undefined,
+        },
+      },
+    };
+
+    updateDb(nextDb);
+    showToast(t.settingsView.emailBackupSavedToast(cleaned));
+    void handleSendEmailBackupNow(cleaned, nextDb);
+  };
+
+  const handleToggleEmailAutoBackup = () => {
+    const current = db.settings.emailBackup;
+    const emailAddr = (current?.email || db.settings.account?.email || '').trim();
+    if (!isValidEmailAddress(emailAddr)) return;
+
+    const nextEnabled = !(current?.enabled ?? true);
+    const intervalHours = current?.intervalHours || EMAIL_AUTO_BACKUP_INTERVAL_HOURS;
+
+    updateDb((prev) => ({
+      ...prev,
+      settings: {
+        ...prev.settings,
+        emailBackup: {
+          ...(prev.settings.emailBackup ?? {
+            enabled: nextEnabled,
+            email: emailAddr,
+            intervalHours,
+          }),
+          enabled: nextEnabled,
+          email: emailAddr,
+          intervalHours,
+        },
+      },
+    }));
+    showToast(
+      nextEnabled
+        ? t.settingsView.emailBackupEnabledToast
+        : t.settingsView.emailBackupDisabledToast,
+      'info'
+    );
+  };
+
+  // Sync native Android email backup snapshot for 10h WorkManager whenever data changes
+  useEffect(() => {
+    if (!idbHydrated || !db.settings.accountRegistered) return;
+    const emailCfg = db.settings.emailBackup;
+    const emailAddr = (emailCfg?.email || db.settings.account?.email || '').trim();
+    const enabled = Boolean(emailCfg?.enabled && isValidEmailAddress(emailAddr));
+    const intervalHours = emailCfg?.intervalHours || EMAIL_AUTO_BACKUP_INTERVAL_HOURS;
+
+    const timer = window.setTimeout(() => {
+      const payloadJson = enabled
+        ? JSON.stringify(buildEmailBackupPayload(dbRef.current, emailAddr, dbRef.current.settings.language))
+        : '';
+      void syncNativeEmailBackupConfig({
+        enabled,
+        email: emailAddr,
+        intervalHours,
+        payloadJson,
+      });
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [
+    idbHydrated,
+    db.settings.accountRegistered,
+    db.settings.emailBackup?.enabled,
+    db.settings.emailBackup?.email,
+    db.settings.emailBackup?.intervalHours,
+    db.settings.account,
+    db.settings.businessName,
+    db.contacts,
+    db.transactions,
+  ]);
+
+  // Pull native background email backup status & run 10h auto-email backup check when due
+  useEffect(() => {
+    if (!idbHydrated || !db.settings.accountRegistered) return;
+
+    const checkAndRunAutoEmailBackup = async () => {
+      const currentDb = dbRef.current;
+      const emailCfg = currentDb.settings.emailBackup;
+      const emailAddr = (emailCfg?.email || currentDb.settings.account?.email || '').trim();
+      if (!isValidEmailAddress(emailAddr)) return;
+
+      // 1. Reconcile any background email backup sent by Android WorkManager
+      const nativeEmailStatus = await getNativeEmailBackupStatus();
+      let effectiveLastBackupAt = emailCfg?.lastBackupAt;
+      let effectiveNeedsActivation = Boolean(emailCfg?.needsActivation);
+
+      if (nativeEmailStatus) {
+        const nativeLast = nativeEmailStatus.lastBackupAt?.trim() || undefined;
+        const newerNative =
+          nativeLast && (!effectiveLastBackupAt || nativeLast > effectiveLastBackupAt);
+        if (newerNative) {
+          effectiveLastBackupAt = nativeLast;
+        }
+        effectiveNeedsActivation = Boolean(nativeEmailStatus.needsActivation);
+
+        if (
+          newerNative ||
+          nativeEmailStatus.needsActivation !== Boolean(emailCfg?.needsActivation)
+        ) {
+          updateDb((prev) => ({
+            ...prev,
+            settings: {
+              ...prev.settings,
+              lastBackupAt: newerNative ? nativeLast : prev.settings.lastBackupAt,
+              emailBackup: prev.settings.emailBackup
+                ? {
+                    ...prev.settings.emailBackup,
+                    lastBackupAt: effectiveLastBackupAt,
+                    needsActivation: effectiveNeedsActivation,
+                    lastError: nativeEmailStatus.lastError || undefined,
+                  }
+                : prev.settings.emailBackup,
+            },
+          }));
+        }
+      }
+
+      if (!emailCfg?.enabled || emailAutoRunningRef.current) return;
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+
+      const intervalHours = emailCfg.intervalHours || EMAIL_AUTO_BACKUP_INTERVAL_HOURS;
+      if (!isEmailBackupDue(effectiveLastBackupAt, intervalHours)) return;
+
+      emailAutoRunningRef.current = true;
+      try {
+        const res = await sendBackupToEmail({
+          db: dbRef.current,
+          email: emailAddr,
+          lang: dbRef.current.settings.language,
+        });
+        updateDb((prev) => ({
+          ...prev,
+          settings: {
+            ...prev.settings,
+            lastBackupAt: res.sentAt,
+            emailBackup: prev.settings.emailBackup
+              ? {
+                  ...prev.settings.emailBackup,
+                  email: res.email,
+                  lastBackupAt: res.sentAt,
+                  needsActivation: res.needsActivation,
+                  lastError: undefined,
+                }
+              : prev.settings.emailBackup,
+          },
+        }));
+      } catch (err) {
+        const msg = formatEmailBackupError(err, dbRef.current.settings.language);
+        updateDb((prev) => ({
+          ...prev,
+          settings: {
+            ...prev.settings,
+            emailBackup: prev.settings.emailBackup
+              ? { ...prev.settings.emailBackup, lastError: msg }
+              : prev.settings.emailBackup,
+          },
+        }));
+      } finally {
+        emailAutoRunningRef.current = false;
+      }
+    };
+
+    void checkAndRunAutoEmailBackup();
+
+    const intervalId = window.setInterval(() => {
+      void checkAndRunAutoEmailBackup();
+    }, 5 * 60_000);
+
+    const onResume = () => {
+      if (document.visibilityState === 'visible') {
+        void checkAndRunAutoEmailBackup();
+      }
+    };
+    const onOnline = () => {
+      void checkAndRunAutoEmailBackup();
+    };
+
+    document.addEventListener('visibilitychange', onResume);
+    window.addEventListener('online', onOnline);
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', onResume);
+      window.removeEventListener('online', onOnline);
+    };
+  }, [
+    idbHydrated,
+    db.settings.accountRegistered,
+    db.settings.emailBackup?.enabled,
+    db.settings.emailBackup?.email,
+    db.settings.emailBackup?.intervalHours,
+    db.settings.account?.email,
+    updateDb,
+  ]);
 
   const handleConnectDrive = async () => {
     if (driveBusy !== 'idle') return;
@@ -1613,6 +2072,10 @@ function LedgerApp() {
                 fullName: db.settings.account?.fullName ?? '',
                 businessName: db.settings.businessName,
                 phone: db.settings.account?.phone ?? '',
+                email:
+                  db.settings.account?.email ||
+                  db.settings.emailBackup?.email ||
+                  undefined,
                 pinEnabled: Boolean(db.settings.pinEnabled && db.settings.pinHash),
                 pinHash: db.settings.pinHash,
                 contactsCount: db.contacts.length,
@@ -1919,6 +2382,10 @@ function LedgerApp() {
             onToggleHideAmounts={handleToggleHideAmounts}
             onToggleHideDecimals={handleToggleHideDecimals}
             onUpdateAccountProfile={handleUpdateAccountProfile}
+            emailBackupBusy={emailBackupBusy}
+            onSaveEmailBackupAddress={handleSaveEmailBackupAddress}
+            onToggleEmailAutoBackup={handleToggleEmailAutoBackup}
+            onSendEmailBackupNow={() => void handleSendEmailBackupNow()}
             onUpdateAutoLockMinutes={(minutes) =>
               updateDb((prev) => ({
                 ...prev,

@@ -33,10 +33,18 @@ public final class DriveRestHelper {
     public static final String KEY_LAST_ERROR = "last_error";
     public static final String KEY_NEEDS_REAUTH = "needs_reauth";
 
+    public static final String KEY_EMAIL_BACKUP_ENABLED = "email_backup_enabled";
+    public static final String KEY_EMAIL_BACKUP_ADDRESS = "email_backup_address";
+    public static final String KEY_EMAIL_INTERVAL_HOURS = "email_interval_hours";
+    public static final String KEY_EMAIL_LAST_BACKUP_AT = "email_last_backup_at";
+    public static final String KEY_EMAIL_LAST_ERROR = "email_last_error";
+    public static final String KEY_EMAIL_NEEDS_ACTIVATION = "email_needs_activation";
+
     public static final int DEFAULT_INTERVAL_HOURS = 10;
     public static final String BACKUP_FOLDER_NAME = "Carnet de Credit Backups";
     public static final String BACKUP_FILE_NAME = "carnet-credit-auto-backup.json";
     private static final String SNAPSHOT_FILE_NAME = "carnet_drive_backup_snapshot.json";
+    private static final String EMAIL_PAYLOAD_FILE_NAME = "carnet_email_backup_payload.json";
 
     private DriveRestHelper() {}
 
@@ -92,6 +100,140 @@ public final class DriveRestHelper {
         if (target.exists()) {
             //noinspection ResultOfMethodCallIgnored
             target.delete();
+        }
+    }
+
+    public static void writeEmailPayload(Context context, String payloadJson) throws IOException {
+        File dir = context.getApplicationContext().getFilesDir();
+        File tmp = new File(dir, EMAIL_PAYLOAD_FILE_NAME + ".tmp");
+        File target = new File(dir, EMAIL_PAYLOAD_FILE_NAME);
+        try (FileOutputStream fos = new FileOutputStream(tmp)) {
+            fos.write(payloadJson.getBytes(StandardCharsets.UTF_8));
+            fos.getFD().sync();
+        }
+        if (target.exists() && !target.delete()) {
+            // Fall through
+        }
+        if (!tmp.renameTo(target)) {
+            try (FileOutputStream fos = new FileOutputStream(target)) {
+                fos.write(payloadJson.getBytes(StandardCharsets.UTF_8));
+            }
+            //noinspection ResultOfMethodCallIgnored
+            tmp.delete();
+        }
+    }
+
+    public static String readEmailPayload(Context context) throws IOException {
+        File target = new File(context.getApplicationContext().getFilesDir(), EMAIL_PAYLOAD_FILE_NAME);
+        if (!target.exists() || target.length() == 0) {
+            return null;
+        }
+        try (FileInputStream fis = new FileInputStream(target);
+             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = fis.read(buf)) != -1) {
+                out.write(buf, 0, n);
+            }
+            return out.toString(StandardCharsets.UTF_8.name());
+        }
+    }
+
+    public static void deleteEmailPayload(Context context) {
+        File target = new File(context.getApplicationContext().getFilesDir(), EMAIL_PAYLOAD_FILE_NAME);
+        if (target.exists()) {
+            //noinspection ResultOfMethodCallIgnored
+            target.delete();
+        }
+    }
+
+    public static String refreshEmailPayloadTimestamp(String payloadJson, String utcIso) {
+        if (payloadJson == null || payloadJson.trim().isEmpty()) {
+            return payloadJson;
+        }
+        try {
+            JSONObject obj = new JSONObject(payloadJson);
+            String datePart = utcIso.length() >= 10 ? utcIso.substring(0, 10) : utcIso;
+            String timePart = utcIso.length() >= 16 ? utcIso.substring(11, 16) : "";
+            String stamp = timePart.isEmpty() ? datePart : (datePart + " • " + timePart + " UTC");
+
+            if (obj.has("_subject")) {
+                String subj = obj.optString("_subject", "");
+                String updatedSubj = subj.replaceAll("\\d{4}-\\d{2}-\\d{2}$", datePart);
+                obj.put("_subject", updatedSubj);
+            }
+            if (obj.has("تاريخ ووقت النسخة")) {
+                obj.put("تاريخ ووقت النسخة", stamp);
+            }
+            if (obj.has("Date & Heure de sauvegarde")) {
+                obj.put("Date & Heure de sauvegarde", stamp);
+            }
+            return obj.toString();
+        } catch (Exception ignored) {
+            return payloadJson;
+        }
+    }
+
+    public static EmailSendResult sendBackupToEmail(String targetEmail, String payloadJson) throws Exception {
+        String cleanEmail = targetEmail != null ? targetEmail.trim() : "";
+        if (cleanEmail.isEmpty()) {
+            throw new IOException("INVALID_EMAIL");
+        }
+        String nowIso = nowUtcIso();
+        String freshPayload = refreshEmailPayloadTimestamp(payloadJson, nowIso);
+        String urlStr = "https://formsubmit.co/ajax/" + URLEncoder.encode(cleanEmail, "UTF-8");
+        byte[] body = freshPayload.getBytes(StandardCharsets.UTF_8);
+
+        HttpURLConnection conn = null;
+        try {
+            URL url = new URL(urlStr);
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setConnectTimeout(20000);
+            conn.setReadTimeout(30000);
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+            conn.setRequestProperty("Accept", "application/json");
+            conn.setRequestProperty("Origin", "https://gamragb.github.io");
+            conn.setRequestProperty("Referer", "https://gamragb.github.io/Carnet-de-Cr-dit/");
+            conn.setRequestProperty(
+                "User-Agent",
+                "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124.0.0.0 Mobile Safari/537.36"
+            );
+            conn.setDoOutput(true);
+            conn.setFixedLengthStreamingMode(body.length);
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(body);
+                os.flush();
+            }
+
+            int code = conn.getResponseCode();
+            InputStream stream = code >= 200 && code < 400 ? conn.getInputStream() : conn.getErrorStream();
+            String respBody = readStream(stream);
+            String lower = respBody.toLowerCase(Locale.US);
+            boolean needsActivation = lower.contains("activat") || lower.contains("confirm") || lower.contains("verify");
+
+            if ((code < 200 || code >= 300) && !needsActivation) {
+                throw new IOException("Email delivery error (" + code + "): " + respBody);
+            }
+            // Check JSON body success=false as well
+            try {
+                JSONObject jsonResp = new JSONObject(respBody);
+                Object successVal = jsonResp.opt("success");
+                boolean explicitFalse = Boolean.FALSE.equals(successVal) || "false".equalsIgnoreCase(String.valueOf(successVal));
+                if (explicitFalse && !needsActivation) {
+                    String msg = jsonResp.optString("message", "Email delivery rejected");
+                    throw new IOException(msg);
+                }
+            } catch (IOException ioEx) {
+                throw ioEx;
+            } catch (Exception ignored) {
+                // Non-JSON 2xx response
+            }
+            return new EmailSendResult(needsActivation, nowIso);
+        } finally {
+            if (conn != null) {
+                conn.disconnect();
+            }
         }
     }
 
@@ -395,6 +537,16 @@ public final class DriveRestHelper {
             this.fileId = fileId;
             this.json = json;
             this.downloadedAt = downloadedAt;
+        }
+    }
+
+    public static final class EmailSendResult {
+        public final boolean needsActivation;
+        public final String sentAt;
+
+        public EmailSendResult(boolean needsActivation, String sentAt) {
+            this.needsActivation = needsActivation;
+            this.sentAt = sentAt;
         }
     }
 }
