@@ -1,6 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   CheckCircle2,
+  Clock,
+  Cloud,
+  CloudOff,
+  CloudUpload,
   Database,
   Download,
   DownloadCloud,
@@ -28,6 +33,7 @@ import {
 } from 'lucide-react';
 import { ConfirmDialog } from '../components/ConfirmDialog.tsx';
 import { PinSetupModal } from '../components/PinLockScreen.tsx';
+import { DRIVE_AUTO_BACKUP_INTERVAL_HOURS } from '../config/driveConfig.ts';
 import { useToast } from '../context/ToastContext.tsx';
 import { UI_TEXT } from '../i18n/translations.ts';
 import type {
@@ -52,6 +58,8 @@ import {
   getTodayISODate,
   isValidPhoneInput,
 } from '../utils/formatters.ts';
+import { computeNextDriveBackupIso } from '../utils/googleDriveBackup.ts';
+import { isNativeApp } from '../utils/nativePlatform.ts';
 import type { UpdateCheckResult } from '../utils/appUpdater.ts';
 import {
   canUseStrongEncryption,
@@ -83,6 +91,13 @@ interface SettingsViewProps {
   onUpdateManifestUrl: (url: string) => void;
   onCheckForUpdates: (overrideUrl?: string) => void;
   onInstallUpdate: () => void;
+  driveBusy: 'idle' | 'connecting' | 'backing_up' | 'restoring';
+  onConnectDrive: () => void;
+  onDisconnectDrive: () => void;
+  onToggleDriveAutoBackup: () => void;
+  onBackupDriveNow: () => void;
+  onRestoreFromDrive: () => Promise<ParsedBackupResult | null>;
+  onUpdateDriveWebClientId: (clientId: string) => void;
   onSavePin: (
     newPin: string | null,
     recovery?: { question: string; answer: string } | null
@@ -121,6 +136,13 @@ export function SettingsView({
   onUpdateManifestUrl,
   onCheckForUpdates,
   onInstallUpdate,
+  driveBusy,
+  onConnectDrive,
+  onDisconnectDrive,
+  onToggleDriveAutoBackup,
+  onBackupDriveNow,
+  onRestoreFromDrive,
+  onUpdateDriveWebClientId,
   onSavePin,
   onLockNow,
   onMarkBackedUp,
@@ -145,6 +167,13 @@ export function SettingsView({
   const [updateUrlInput, setUpdateUrlInput] = useState(
     db.settings.updateManifestUrl ?? ''
   );
+  const [driveClientIdInput, setDriveClientIdInput] = useState(
+    db.settings.driveBackup?.webClientId ?? ''
+  );
+
+  useEffect(() => {
+    setDriveClientIdInput(db.settings.driveBackup?.webClientId ?? '');
+  }, [db.settings.driveBackup?.webClientId]);
 
   useEffect(() => {
     setFullNameInput(db.settings.account?.fullName ?? '');
@@ -212,6 +241,29 @@ export function SettingsView({
       onCheckForUpdates(cleaned);
     }
   };
+
+  const handleSaveDriveClientId = (e: React.FormEvent) => {
+    e.preventDefault();
+    onUpdateDriveWebClientId(driveClientIdInput.trim());
+    showToast(s.driveClientSavedToast);
+  };
+
+  const handleDriveRestoreClick = async () => {
+    const parsed = await onRestoreFromDrive();
+    if (parsed) {
+      setPendingRestore(parsed);
+    }
+  };
+
+  const drive = db.settings.driveBackup;
+  const driveConnected = Boolean(drive?.connected);
+  const driveEnabled = Boolean(drive?.enabled && drive?.connected);
+  const driveIntervalHours = drive?.intervalHours || DRIVE_AUTO_BACKUP_INTERVAL_HOURS;
+  const nextDriveIso =
+    driveEnabled && drive?.lastBackupAt
+      ? computeNextDriveBackupIso(drive.lastBackupAt, driveIntervalHours)
+      : null;
+  const nativePlatform = isNativeApp();
 
   const handleSaveWhatsAppTemplate = () => {
     onUpdateWhatsAppTemplate(waTemplateInput.trim());
@@ -824,6 +876,191 @@ export function SettingsView({
             )}
           </div>
         </div>
+      </section>
+
+      {/* Google Drive Auto-Backup (Every 10 Hours) */}
+      <section className="space-y-3.5 rounded-3xl border border-slate-200/90 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5">
+            <div
+              className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl ${
+                driveConnected
+                  ? 'bg-sky-50 text-sky-700 dark:bg-sky-950/60 dark:text-sky-300'
+                  : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
+              }`}
+            >
+              {driveConnected ? (
+                <Cloud className="h-5 w-5" />
+              ) : (
+                <CloudOff className="h-5 w-5" />
+              )}
+            </div>
+            <div className="min-w-0">
+              <h3 className="text-sm font-extrabold text-slate-900 dark:text-white">
+                {s.driveTitle}
+              </h3>
+              <p className="truncate text-xs text-slate-500 dark:text-slate-400">
+                {driveConnected && drive?.email
+                  ? drive.email
+                  : s.driveSubtitle(driveIntervalHours)}
+              </p>
+            </div>
+          </div>
+
+          <span
+            className={`shrink-0 rounded-full px-2.5 py-0.5 text-[11px] font-bold ${
+              driveConnected
+                ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
+            }`}
+          >
+            {driveConnected ? s.driveConnectedBadge : s.driveDisconnectedBadge}
+          </span>
+        </div>
+
+        {drive?.needsReauth && driveConnected && (
+          <div className="flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs font-semibold text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/50 dark:text-amber-200">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{s.driveReauthWarning}</span>
+          </div>
+        )}
+
+        {driveConnected ? (
+          <>
+            <div className="flex items-center justify-between gap-3 rounded-2xl bg-slate-50/90 p-3 dark:bg-slate-800/60">
+              <div className="min-w-0">
+                <p className="flex items-center gap-1.5 text-xs font-extrabold text-slate-900 dark:text-white">
+                  <Clock className="h-3.5 w-3.5 text-teal-700 dark:text-teal-400" />
+                  <span>{s.driveAutoToggleTitle(driveIntervalHours)}</span>
+                </p>
+                <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+                  {s.driveAutoToggleDesc}
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={driveEnabled}
+                onClick={onToggleDriveAutoBackup}
+                dir="ltr"
+                className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${
+                  driveEnabled ? 'bg-teal-600' : 'bg-slate-300 dark:bg-slate-700'
+                }`}
+              >
+                <span
+                  className={`block h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                    driveEnabled ? 'translate-x-6' : 'translate-x-1'
+                  }`}
+                />
+              </button>
+            </div>
+
+            <div className="space-y-1 rounded-2xl border border-slate-100 bg-slate-50/60 px-3 py-2.5 text-[11px] text-slate-600 dark:border-slate-800 dark:bg-slate-800/40 dark:text-slate-300">
+              <p className="font-semibold">
+                {drive?.lastBackupAt
+                  ? s.driveLastBackupLabel(
+                      (() => {
+                        const { date, time } = formatDateTimeFR(drive.lastBackupAt, lang);
+                        return time ? `${date} • ${time}` : date;
+                      })()
+                    )
+                  : s.driveNeverBackedUp}
+              </p>
+              {nextDriveIso && (
+                <p className="text-teal-700 dark:text-teal-400">
+                  {s.driveNextBackupLabel(
+                    (() => {
+                      const { date, time } = formatDateTimeFR(nextDriveIso, lang);
+                      return time ? `${date} • ${time}` : date;
+                    })()
+                  )}
+                </p>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                disabled={driveBusy !== 'idle'}
+                onClick={onBackupDriveNow}
+                className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-2xl bg-sky-600 px-3 text-xs font-bold text-white shadow-sm transition hover:bg-sky-700 disabled:opacity-60"
+              >
+                <CloudUpload className="h-4 w-4 shrink-0" />
+                <span className="truncate">
+                  {driveBusy === 'backing_up' ? s.driveBackingUpBtn : s.driveBackupNowBtn}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                disabled={driveBusy !== 'idle'}
+                onClick={handleDriveRestoreClick}
+                className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-2xl border border-sky-200 bg-sky-50 px-3 text-xs font-bold text-sky-800 transition hover:bg-sky-100 disabled:opacity-60 dark:border-sky-900/60 dark:bg-sky-950/40 dark:text-sky-300"
+              >
+                <Download className="h-4 w-4 shrink-0" />
+                <span className="truncate">
+                  {driveBusy === 'restoring' ? s.driveRestoringBtn : s.driveRestoreBtn}
+                </span>
+              </button>
+            </div>
+
+            <button
+              type="button"
+              disabled={driveBusy !== 'idle'}
+              onClick={onDisconnectDrive}
+              className="min-h-[38px] w-full rounded-xl border border-rose-200 bg-rose-50/70 px-3 text-xs font-bold text-rose-700 transition hover:bg-rose-100 disabled:opacity-60 dark:border-rose-900/50 dark:bg-rose-950/40 dark:text-rose-300"
+            >
+              {s.driveDisconnectBtn}
+            </button>
+          </>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-xs leading-relaxed text-slate-600 dark:text-slate-300">
+              {s.driveAutoToggleDesc}
+            </p>
+            <button
+              type="button"
+              disabled={driveBusy !== 'idle'}
+              onClick={onConnectDrive}
+              className="flex min-h-[46px] w-full items-center justify-center gap-2 rounded-2xl bg-sky-600 px-4 text-xs font-extrabold text-white shadow-sm transition hover:bg-sky-700 disabled:opacity-60"
+            >
+              <Cloud className="h-4 w-4" />
+              <span>
+                {driveBusy === 'connecting' ? s.driveConnectingBtn : s.driveConnectBtn}
+              </span>
+            </button>
+          </div>
+        )}
+
+        {!nativePlatform && (
+          <form
+            onSubmit={handleSaveDriveClientId}
+            className="space-y-1.5 border-t border-slate-100 pt-3 dark:border-slate-800"
+          >
+            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
+              {s.driveWebClientLabel}
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                dir="ltr"
+                value={driveClientIdInput}
+                onChange={(e) => setDriveClientIdInput(e.target.value)}
+                placeholder={s.driveWebClientPlaceholder}
+                className="min-h-[40px] flex-1 rounded-2xl border border-slate-200 bg-slate-50 px-3 text-xs font-medium text-slate-900 outline-none focus:border-sky-600 focus:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+              />
+              <button
+                type="submit"
+                className="min-h-[40px] shrink-0 rounded-2xl bg-slate-900 px-3.5 text-xs font-bold text-white hover:bg-slate-800 dark:bg-teal-700 dark:hover:bg-teal-600"
+              >
+                {s.okBtn}
+              </button>
+            </div>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              {s.driveWebClientHint}
+            </p>
+          </form>
+        )}
       </section>
 
       {/* Export / Import Backup & CSV */}

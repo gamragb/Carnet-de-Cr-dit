@@ -34,6 +34,10 @@ import type {
   Transaction,
   TransactionType,
 } from './types/ledger.ts';
+import {
+  DEFAULT_GOOGLE_WEB_CLIENT_ID,
+  DRIVE_AUTO_BACKUP_INTERVAL_HOURS,
+} from './config/driveConfig.ts';
 import { APP_VERSION, DEFAULT_UPDATE_MANIFEST_URL } from './config/updateConfig.ts';
 import {
   checkForAppUpdate,
@@ -46,9 +50,21 @@ import {
 import {
   buildJSONBackup,
   mergeBackupDatabases,
+  parseAndValidateBackupJSON,
   triggerFileDownload,
   type ParsedBackupResult,
 } from './utils/exportImport.ts';
+import {
+  backupToGoogleDrive,
+  configureNativeDriveSchedule,
+  connectGoogleDrive,
+  disconnectGoogleDrive,
+  formatDriveError,
+  getNativeDriveStatus,
+  isDriveBackupDue,
+  restoreFromGoogleDrive,
+  syncNativeDriveSnapshot,
+} from './utils/googleDriveBackup.ts';
 import { getTodayISODate } from './utils/formatters.ts';
 import {
   computeAllLedgers,
@@ -115,6 +131,11 @@ function LedgerApp() {
   const [updateProgress, setUpdateProgress] = useState(0);
   const [updateBannerDismissed, setUpdateBannerDismissed] = useState(false);
   const autoCheckedRef = useRef(false);
+
+  const [driveBusy, setDriveBusy] = useState<
+    'idle' | 'connecting' | 'backing_up' | 'restoring'
+  >('idle');
+  const driveAutoRunningRef = useRef(false);
 
   const [deleteContactTarget, setDeleteContactTarget] = useState<Contact | null>(null);
   const [deleteTxTarget, setDeleteTxTarget] = useState<Transaction | null>(null);
@@ -742,6 +763,7 @@ function LedgerApp() {
   };
 
   const handleEmergencyResetData = () => {
+    void disconnectGoogleDrive();
     const fresh = createInitialDatabase(lang);
     const resetDb: LedgerDatabase = {
       ...fresh,
@@ -801,7 +823,10 @@ function LedgerApp() {
     showToast(UI_TEXT[payload.language].toasts.accountCreated(payload.fullName));
   };
 
-  const handleRestoreFromOnboarding = (payload: ParsedBackupResult) => {
+  const handleRestoreFromOnboarding = (
+    payload: ParsedBackupResult,
+    driveMeta?: { fileId: string; email: string }
+  ) => {
     const now = new Date().toISOString();
     const targetLang = payload.language ?? lang;
     updateDb((prev) => ({
@@ -827,8 +852,28 @@ function LedgerApp() {
         hideDecimals: payload.hideDecimals ?? prev.settings.hideDecimals,
         csvDelimiter: payload.csvDelimiter ?? prev.settings.csvDelimiter,
         whatsAppTemplate: payload.whatsAppTemplate ?? prev.settings.whatsAppTemplate,
+        driveBackup: driveMeta
+          ? {
+              ...(prev.settings.driveBackup ?? {
+                enabled: true,
+                connected: true,
+                email: '',
+                intervalHours: DRIVE_AUTO_BACKUP_INTERVAL_HOURS,
+              }),
+              enabled: true,
+              connected: true,
+              email: driveMeta.email,
+              fileId: driveMeta.fileId,
+              intervalHours: DRIVE_AUTO_BACKUP_INTERVAL_HOURS,
+              needsReauth: false,
+              lastError: undefined,
+            }
+          : prev.settings.driveBackup,
       },
     }));
+    if (driveMeta) {
+      void configureNativeDriveSchedule(true, DRIVE_AUTO_BACKUP_INTERVAL_HOURS);
+    }
     lastActivityRef.current = Date.now();
     setSelectedContactId(null);
     setActiveTab('dashboard');
@@ -866,6 +911,7 @@ function LedgerApp() {
   };
 
   const handleResetAccount = () => {
+    void disconnectGoogleDrive();
     const fresh = createInitialDatabase(lang);
     const resetDb: LedgerDatabase = {
       ...fresh,
@@ -1112,6 +1158,380 @@ function LedgerApp() {
     void handleCheckForUpdates(true, configuredUrl);
   }, [idbHydrated, db.settings.updateManifestUrl, handleCheckForUpdates]);
 
+  const dbRef = useRef(db);
+  dbRef.current = db;
+
+  const handleConnectDrive = async () => {
+    if (driveBusy !== 'idle') return;
+    setDriveBusy('connecting');
+    try {
+      const currentDb = dbRef.current;
+      const intervalHours =
+        currentDb.settings.driveBackup?.intervalHours || DRIVE_AUTO_BACKUP_INTERVAL_HOURS;
+      const webClientId =
+        currentDb.settings.driveBackup?.webClientId || DEFAULT_GOOGLE_WEB_CLIENT_ID;
+      const snapshotJson = buildJSONBackup(currentDb);
+
+      const { email } = await connectGoogleDrive({
+        intervalHours,
+        snapshotJson,
+        webClientId,
+      });
+
+      let initialBackupAt = currentDb.settings.driveBackup?.lastBackupAt;
+      let fileId = currentDb.settings.driveBackup?.fileId;
+      let resolvedEmail = email;
+      try {
+        const firstUpload = await backupToGoogleDrive({
+          json: snapshotJson,
+          interactive: false,
+          fileId,
+          webClientId,
+        });
+        initialBackupAt = firstUpload.backedUpAt;
+        fileId = firstUpload.fileId || fileId;
+        resolvedEmail = firstUpload.email || resolvedEmail;
+      } catch {
+        // Connection succeeded; initial upload will retry on schedule or manual tap
+      }
+
+      updateDb((prev) => ({
+        ...prev,
+        settings: {
+          ...prev.settings,
+          lastBackupAt: initialBackupAt || prev.settings.lastBackupAt,
+          driveBackup: {
+            ...(prev.settings.driveBackup ?? {
+              enabled: true,
+              connected: true,
+              email: '',
+              intervalHours,
+            }),
+            enabled: true,
+            connected: true,
+            email: resolvedEmail,
+            intervalHours,
+            fileId,
+            lastBackupAt: initialBackupAt,
+            lastError: undefined,
+            needsReauth: false,
+          },
+        },
+      }));
+      showToast(t.settingsView.driveConnectedToast(resolvedEmail));
+    } catch (err) {
+      showToast(formatDriveError(err, lang), 'error');
+    } finally {
+      setDriveBusy('idle');
+    }
+  };
+
+  const handleDisconnectDrive = async () => {
+    if (driveBusy !== 'idle') return;
+    await disconnectGoogleDrive();
+    updateDb((prev) => ({
+      ...prev,
+      settings: {
+        ...prev.settings,
+        driveBackup: {
+          ...(prev.settings.driveBackup ?? {
+            enabled: false,
+            connected: false,
+            email: '',
+            intervalHours: DRIVE_AUTO_BACKUP_INTERVAL_HOURS,
+          }),
+          enabled: false,
+          connected: false,
+          email: '',
+          fileId: undefined,
+          lastBackupAt: undefined,
+          lastError: undefined,
+          needsReauth: false,
+        },
+      },
+    }));
+    showToast(t.settingsView.driveDisconnectedToast, 'info');
+  };
+
+  const handleToggleDriveAutoBackup = () => {
+    const current = db.settings.driveBackup;
+    if (!current?.connected) return;
+    const nextEnabled = !current.enabled;
+    const intervalHours = current.intervalHours || DRIVE_AUTO_BACKUP_INTERVAL_HOURS;
+    void configureNativeDriveSchedule(nextEnabled, intervalHours);
+    if (nextEnabled) {
+      void syncNativeDriveSnapshot(buildJSONBackup(db));
+    }
+    updateDb((prev) => ({
+      ...prev,
+      settings: {
+        ...prev.settings,
+        driveBackup: {
+          ...(prev.settings.driveBackup ?? {
+            enabled: nextEnabled,
+            connected: true,
+            email: '',
+            intervalHours,
+          }),
+          enabled: nextEnabled,
+          intervalHours,
+        },
+      },
+    }));
+    showToast(
+      nextEnabled
+        ? t.settingsView.driveScheduleEnabledToast
+        : t.settingsView.driveScheduleDisabledToast,
+      'info'
+    );
+  };
+
+  const handleBackupDriveNow = async () => {
+    if (driveBusy !== 'idle') return;
+    setDriveBusy('backing_up');
+    try {
+      const currentDb = dbRef.current;
+      const driveCfg = currentDb.settings.driveBackup;
+      const res = await backupToGoogleDrive({
+        json: buildJSONBackup(currentDb),
+        interactive: true,
+        fileId: driveCfg?.fileId,
+        webClientId: driveCfg?.webClientId || DEFAULT_GOOGLE_WEB_CLIENT_ID,
+      });
+
+      const intervalHours = driveCfg?.intervalHours || DRIVE_AUTO_BACKUP_INTERVAL_HOURS;
+      if (driveCfg?.enabled) {
+        void configureNativeDriveSchedule(true, intervalHours);
+      }
+
+      updateDb((prev) => ({
+        ...prev,
+        settings: {
+          ...prev.settings,
+          lastBackupAt: res.backedUpAt,
+          driveBackup: {
+            ...(prev.settings.driveBackup ?? {
+              enabled: true,
+              connected: true,
+              email: '',
+              intervalHours,
+            }),
+            connected: true,
+            fileId: res.fileId || prev.settings.driveBackup?.fileId,
+            email: res.email || prev.settings.driveBackup?.email || '',
+            lastBackupAt: res.backedUpAt,
+            lastError: undefined,
+            needsReauth: false,
+          },
+        },
+      }));
+      setBackupReminderDismissed(true);
+      showToast(t.settingsView.driveBackedUpToast);
+    } catch (err) {
+      const msg = formatDriveError(err, lang);
+      updateDb((prev) => ({
+        ...prev,
+        settings: {
+          ...prev.settings,
+          driveBackup: prev.settings.driveBackup
+            ? { ...prev.settings.driveBackup, lastError: msg }
+            : prev.settings.driveBackup,
+        },
+      }));
+      showToast(msg, 'error');
+    } finally {
+      setDriveBusy('idle');
+    }
+  };
+
+  const handleRestoreFromDrive = async (): Promise<ParsedBackupResult | null> => {
+    if (driveBusy !== 'idle') return null;
+    setDriveBusy('restoring');
+    try {
+      const driveCfg = dbRef.current.settings.driveBackup;
+      const res = await restoreFromGoogleDrive({
+        fileId: driveCfg?.fileId,
+        webClientId: driveCfg?.webClientId || DEFAULT_GOOGLE_WEB_CLIENT_ID,
+      });
+      const parsed = parseAndValidateBackupJSON(res.json, lang);
+      updateDb((prev) => ({
+        ...prev,
+        settings: {
+          ...prev.settings,
+          driveBackup: prev.settings.driveBackup
+            ? {
+                ...prev.settings.driveBackup,
+                connected: true,
+                fileId: res.fileId || prev.settings.driveBackup.fileId,
+                email: res.email || prev.settings.driveBackup.email,
+                needsReauth: false,
+                lastError: undefined,
+              }
+            : prev.settings.driveBackup,
+        },
+      }));
+      return parsed;
+    } catch (err) {
+      showToast(formatDriveError(err, lang), 'error');
+      return null;
+    } finally {
+      setDriveBusy('idle');
+    }
+  };
+
+  // Sync native Android snapshot for 10h WorkManager whenever data changes
+  useEffect(() => {
+    if (!idbHydrated || !db.settings.accountRegistered) return;
+    const driveCfg = db.settings.driveBackup;
+    if (!driveCfg?.connected || !driveCfg?.enabled) return;
+
+    const timer = window.setTimeout(() => {
+      void syncNativeDriveSnapshot(buildJSONBackup(dbRef.current));
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [
+    idbHydrated,
+    db.settings.accountRegistered,
+    db.settings.driveBackup?.connected,
+    db.settings.driveBackup?.enabled,
+    db.contacts,
+    db.transactions,
+    db.settings.businessName,
+    db.settings.account,
+  ]);
+
+  // Pull native background WorkManager status & run 10h auto-backup check when due
+  useEffect(() => {
+    if (!idbHydrated || !db.settings.accountRegistered) return;
+
+    const checkAndRunAutoDriveBackup = async () => {
+      const currentDb = dbRef.current;
+      const driveCfg = currentDb.settings.driveBackup;
+      if (!driveCfg?.connected) return;
+
+      // 1. Reconcile any background backup performed by Android WorkManager while app was closed
+      const nativeStatus = await getNativeDriveStatus();
+      let effectiveLastBackupAt = driveCfg.lastBackupAt;
+      let effectiveNeedsReauth = Boolean(driveCfg.needsReauth);
+
+      if (nativeStatus) {
+        const nativeLast = nativeStatus.lastBackupAt?.trim() || undefined;
+        const newerNative =
+          nativeLast && (!effectiveLastBackupAt || nativeLast > effectiveLastBackupAt);
+        if (newerNative) {
+          effectiveLastBackupAt = nativeLast;
+        }
+        effectiveNeedsReauth = Boolean(nativeStatus.needsReauth);
+
+        if (
+          newerNative ||
+          nativeStatus.needsReauth !== Boolean(driveCfg.needsReauth) ||
+          (nativeStatus.fileId && nativeStatus.fileId !== driveCfg.fileId)
+        ) {
+          updateDb((prev) => ({
+            ...prev,
+            settings: {
+              ...prev.settings,
+              lastBackupAt: newerNative ? nativeLast : prev.settings.lastBackupAt,
+              driveBackup: prev.settings.driveBackup
+                ? {
+                    ...prev.settings.driveBackup,
+                    fileId: nativeStatus.fileId || prev.settings.driveBackup.fileId,
+                    email: nativeStatus.email || prev.settings.driveBackup.email,
+                    lastBackupAt: effectiveLastBackupAt,
+                    needsReauth: effectiveNeedsReauth,
+                    lastError: nativeStatus.lastError || undefined,
+                  }
+                : prev.settings.driveBackup,
+            },
+          }));
+        }
+      }
+
+      if (!driveCfg.enabled || effectiveNeedsReauth || driveAutoRunningRef.current) return;
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+
+      const intervalHours = driveCfg.intervalHours || DRIVE_AUTO_BACKUP_INTERVAL_HOURS;
+      if (!isDriveBackupDue(effectiveLastBackupAt, intervalHours)) return;
+
+      driveAutoRunningRef.current = true;
+      try {
+        const res = await backupToGoogleDrive({
+          json: buildJSONBackup(dbRef.current),
+          interactive: false,
+          fileId: driveCfg.fileId,
+          webClientId: driveCfg.webClientId || DEFAULT_GOOGLE_WEB_CLIENT_ID,
+        });
+        updateDb((prev) => ({
+          ...prev,
+          settings: {
+            ...prev.settings,
+            lastBackupAt: res.backedUpAt,
+            driveBackup: prev.settings.driveBackup
+              ? {
+                  ...prev.settings.driveBackup,
+                  fileId: res.fileId || prev.settings.driveBackup.fileId,
+                  email: res.email || prev.settings.driveBackup.email,
+                  lastBackupAt: res.backedUpAt,
+                  needsReauth: false,
+                  lastError: undefined,
+                }
+              : prev.settings.driveBackup,
+          },
+        }));
+      } catch (err) {
+        const raw = err instanceof Error ? err.message : String(err ?? '');
+        if (
+          raw.includes('AUTH_REQUIRED') ||
+          raw.includes('consent_required') ||
+          raw.includes('interaction_required')
+        ) {
+          updateDb((prev) => ({
+            ...prev,
+            settings: {
+              ...prev.settings,
+              driveBackup: prev.settings.driveBackup
+                ? { ...prev.settings.driveBackup, needsReauth: true }
+                : prev.settings.driveBackup,
+            },
+          }));
+        }
+      } finally {
+        driveAutoRunningRef.current = false;
+      }
+    };
+
+    void checkAndRunAutoDriveBackup();
+
+    const intervalId = window.setInterval(() => {
+      void checkAndRunAutoDriveBackup();
+    }, 5 * 60_000);
+
+    const onResume = () => {
+      if (document.visibilityState === 'visible') {
+        void checkAndRunAutoDriveBackup();
+      }
+    };
+    const onOnline = () => {
+      void checkAndRunAutoDriveBackup();
+    };
+
+    document.addEventListener('visibilitychange', onResume);
+    window.addEventListener('online', onOnline);
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', onResume);
+      window.removeEventListener('online', onOnline);
+    };
+  }, [
+    idbHydrated,
+    db.settings.accountRegistered,
+    db.settings.driveBackup?.connected,
+    db.settings.driveBackup?.enabled,
+    db.settings.driveBackup?.intervalHours,
+    updateDb,
+  ]);
+
   const accountDisplayLabel =
     db.settings.businessName.trim() || db.settings.account?.fullName?.trim() || '';
 
@@ -1129,6 +1549,7 @@ function LedgerApp() {
     return (
       <AccountOnboardingScreen
         lang={lang}
+        webDriveClientId={db.settings.driveBackup?.webClientId}
         onChangeLanguage={handleChangeLanguage}
         onRegister={handleRegisterAccount}
         onRestoreBackup={handleRestoreFromOnboarding}
@@ -1434,6 +1855,29 @@ function LedgerApp() {
             }
             onCheckForUpdates={(overrideUrl) => handleCheckForUpdates(false, overrideUrl)}
             onInstallUpdate={handleInstallUpdate}
+            driveBusy={driveBusy}
+            onConnectDrive={handleConnectDrive}
+            onDisconnectDrive={handleDisconnectDrive}
+            onToggleDriveAutoBackup={handleToggleDriveAutoBackup}
+            onBackupDriveNow={handleBackupDriveNow}
+            onRestoreFromDrive={handleRestoreFromDrive}
+            onUpdateDriveWebClientId={(clientId) =>
+              updateDb((prev) => ({
+                ...prev,
+                settings: {
+                  ...prev.settings,
+                  driveBackup: {
+                    ...(prev.settings.driveBackup ?? {
+                      enabled: false,
+                      connected: false,
+                      email: '',
+                      intervalHours: DRIVE_AUTO_BACKUP_INTERVAL_HOURS,
+                    }),
+                    webClientId: clientId,
+                  },
+                },
+              }))
+            }
             onSavePin={handleSavePin}
             onLockNow={() => setIsUnlocked(false)}
             onMarkBackedUp={handleMarkBackedUp}

@@ -9,6 +9,18 @@ export interface UserAccountProfile {
   createdAt: string;
 }
 
+export interface DriveBackupSettings {
+  enabled: boolean;
+  connected: boolean;
+  email: string;
+  intervalHours: number;
+  fileId?: string;
+  lastBackupAt?: string;
+  lastError?: string;
+  needsReauth?: boolean;
+  webClientId?: string;
+}
+
 export type ContactCategory = 'Client' | 'Fournisseur' | 'Famille/Ami' | 'Autre';
 
 export type TransactionType =
@@ -72,6 +84,7 @@ export interface AppSettings {
   lastUpdateCheckAt?: string;
   accountRegistered?: boolean;
   account?: UserAccountProfile;
+  driveBackup?: DriveBackupSettings;
 }
 
 export interface LedgerDatabase {

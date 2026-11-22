@@ -1,6 +1,7 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   BookOpenCheck,
+  Cloud,
   KeyRound,
   Lock,
   Phone,
@@ -11,6 +12,7 @@ import {
   UserPlus,
   X,
 } from 'lucide-react';
+import { DEFAULT_GOOGLE_WEB_CLIENT_ID } from '../config/driveConfig.ts';
 import { UI_TEXT } from '../i18n/translations.ts';
 import type { AccountUsageType, AppLanguage } from '../types/ledger.ts';
 import {
@@ -18,6 +20,12 @@ import {
   type ParsedBackupResult,
 } from '../utils/exportImport.ts';
 import { formatMoroccanPhone, isValidPhoneInput } from '../utils/formatters.ts';
+import {
+  formatDriveError,
+  isNativeDrivePluginAvailable,
+  isValidGoogleClientId,
+  restoreFromGoogleDrive,
+} from '../utils/googleDriveBackup.ts';
 import {
   canUseStrongEncryption,
   decryptBackupJSON,
@@ -36,13 +44,18 @@ export interface AccountRegistrationPayload {
 
 interface AccountOnboardingScreenProps {
   lang: AppLanguage;
+  webDriveClientId?: string;
   onChangeLanguage: (lang: AppLanguage) => void;
   onRegister: (payload: AccountRegistrationPayload) => Promise<void>;
-  onRestoreBackup: (payload: ParsedBackupResult) => void;
+  onRestoreBackup: (
+    payload: ParsedBackupResult,
+    driveMeta?: { fileId: string; email: string }
+  ) => void;
 }
 
 export function AccountOnboardingScreen({
   lang,
+  webDriveClientId,
   onChangeLanguage,
   onRegister,
   onRestoreBackup,
@@ -70,6 +83,38 @@ export function AccountOnboardingScreen({
   const [passInput, setPassInput] = useState('');
   const [passError, setPassError] = useState('');
   const [passBusy, setPassBusy] = useState(false);
+
+  const [driveRestoreAvailable, setDriveRestoreAvailable] = useState(false);
+  const [driveRestoring, setDriveRestoring] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    void isNativeDrivePluginAvailable().then((nativeAvailable) => {
+      if (!active) return;
+      const effectiveClientId = (webDriveClientId || DEFAULT_GOOGLE_WEB_CLIENT_ID).trim();
+      setDriveRestoreAvailable(nativeAvailable || isValidGoogleClientId(effectiveClientId));
+    });
+    return () => {
+      active = false;
+    };
+  }, [webDriveClientId]);
+
+  const handleRestoreFromDrive = async () => {
+    if (driveRestoring) return;
+    setError('');
+    setDriveRestoring(true);
+    try {
+      const res = await restoreFromGoogleDrive({
+        webClientId: webDriveClientId || DEFAULT_GOOGLE_WEB_CLIENT_ID,
+      });
+      const parsed = parseAndValidateBackupJSON(res.json, lang);
+      onRestoreBackup(parsed, { fileId: res.fileId, email: res.email });
+    } catch (err) {
+      setError(formatDriveError(err, lang));
+    } finally {
+      setDriveRestoring(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -487,14 +532,28 @@ export function AccountOnboardingScreen({
             <div className="h-px flex-1 bg-slate-200 dark:bg-slate-800" />
           </div>
 
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            className="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-slate-300 bg-slate-50/70 px-3 text-xs font-bold text-slate-700 transition hover:border-teal-500 hover:bg-teal-50/50 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-200"
-          >
-            <Upload className="h-4 w-4 text-teal-700 dark:text-teal-400" />
-            <span>{ob.restoreBtn}</span>
-          </button>
+          <div className="space-y-2">
+            {driveRestoreAvailable && (
+              <button
+                type="button"
+                disabled={driveRestoring}
+                onClick={handleRestoreFromDrive}
+                className="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-2xl border border-sky-200 bg-sky-50 px-3 text-xs font-bold text-sky-800 transition hover:bg-sky-100 disabled:opacity-60 dark:border-sky-900/60 dark:bg-sky-950/40 dark:text-sky-300"
+              >
+                <Cloud className="h-4 w-4 shrink-0" />
+                <span>{driveRestoring ? ob.restoringDriveBtn : ob.restoreDriveBtn}</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-slate-300 bg-slate-50/70 px-3 text-xs font-bold text-slate-700 transition hover:border-teal-500 hover:bg-teal-50/50 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-200"
+            >
+              <Upload className="h-4 w-4 text-teal-700 dark:text-teal-400" />
+              <span>{ob.restoreBtn}</span>
+            </button>
+          </div>
 
           <input
             ref={fileInputRef}

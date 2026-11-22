@@ -497,6 +497,38 @@ export const UI_TEXT = {
       confirmResetAccountDesc:
         'Toutes les données, votre profil et le code PIN seront supprimés de cet appareil, puis l’écran de création de compte s’affichera.',
       confirmResetAccountBtn: 'Oui, tout réinitialiser',
+      driveTitle: 'Sauvegarde auto Google Drive',
+      driveSubtitle: (hours: number) => `Copie automatique toutes les ${hours} heures`,
+      driveConnectedBadge: 'Connecté',
+      driveDisconnectedBadge: 'Non connecté',
+      driveAutoToggleTitle: (hours: number) => `Sauvegarde automatique toutes les ${hours} h`,
+      driveAutoToggleDesc:
+        'Enregistre votre carnet dans « Carnet de Credit Backups » sur votre Google Drive',
+      driveConnectBtn: 'Connecter Google Drive',
+      driveConnectingBtn: 'Connexion...',
+      driveBackupNowBtn: 'Sauvegarder sur Drive',
+      driveBackingUpBtn: 'Envoi vers Drive...',
+      driveRestoreBtn: 'Restaurer depuis Drive',
+      driveRestoringBtn: 'Chargement...',
+      driveDisconnectBtn: 'Déconnecter',
+      driveLastBackupLabel: (date: string) => `Dernière sauvegarde Drive : ${date}`,
+      driveNeverBackedUp: 'Aucune sauvegarde Drive effectuée pour le moment.',
+      driveNextBackupLabel: (date: string) => `Prochaine sauvegarde auto : ${date}`,
+      driveReauthWarning:
+        'Autorisation expirée : appuyez sur « Sauvegarder sur Drive » pour réactiver la sauvegarde automatique.',
+      driveWebClientLabel: 'Google OAuth Client ID (Web / PWA)',
+      driveWebClientPlaceholder: '123456789-xxxx.apps.googleusercontent.com',
+      driveWebClientHint:
+        'Nécessaire sur navigateur Web uniquement (Android utilise l’authentification Google native).',
+      driveClientSavedToast: 'Google Client ID enregistré.',
+      driveConnectedToast: (email: string) =>
+        email
+          ? `Google Drive connecté (${email}) — sauvegarde auto toutes les 10 h activée !`
+          : 'Google Drive connecté — sauvegarde auto toutes les 10 h activée !',
+      driveDisconnectedToast: 'Compte Google Drive déconnecté.',
+      driveBackedUpToast: 'Sauvegarde enregistrée sur Google Drive !',
+      driveScheduleEnabledToast: 'Sauvegarde automatique Google Drive (10 h) activée.',
+      driveScheduleDisabledToast: 'Sauvegarde automatique Google Drive mise en pause.',
     },
     onboarding: {
       badge: 'Nouveau compte',
@@ -527,6 +559,8 @@ export const UI_TEXT = {
       submittingBtn: 'Création en cours...',
       orDivider: 'ou',
       restoreBtn: 'Déjà un compte ? Restaurer une sauvegarde (.json)',
+      restoreDriveBtn: 'Restaurer depuis Google Drive',
+      restoringDriveBtn: 'Connexion à Google Drive...',
       privacyNote:
         '100% privé & hors ligne : vos données restent uniquement sur votre téléphone.',
     },
@@ -1037,6 +1071,38 @@ export const UI_TEXT = {
       confirmResetAccountDesc:
         'سيتم حذف جميع الأشخاص والعمليات ومعلومات حسابك ورمز PIN من هذا الجهاز، ثم العودة إلى شاشة تسجيل حساب جديد.',
       confirmResetAccountBtn: 'نعم، تصفير الكل',
+      driveTitle: 'النسخ التلقائي على Google Drive',
+      driveSubtitle: (hours: number) => `حفظ نسخة احتياطية تلقائياً كل ${hours} ساعات`,
+      driveConnectedBadge: 'متصل',
+      driveDisconnectedBadge: 'غير متصل',
+      driveAutoToggleTitle: (hours: number) => `نسخ احتياطي تلقائي كل ${hours} ساعات`,
+      driveAutoToggleDesc:
+        'يحفظ نسخة من دفتر الكريدي داخل مجلد « Carnet de Credit Backups » في Google Drive الخاص بك',
+      driveConnectBtn: 'ربط حساب Google Drive',
+      driveConnectingBtn: 'جاري الربط...',
+      driveBackupNowBtn: 'نسخ الآن على Drive',
+      driveBackingUpBtn: 'جاري الرفع إلى Drive...',
+      driveRestoreBtn: 'استرجاع من Drive',
+      driveRestoringBtn: 'جاري الاسترجاع...',
+      driveDisconnectBtn: 'فصل الحساب',
+      driveLastBackupLabel: (date: string) => `آخر نسخة على Drive: ${date}`,
+      driveNeverBackedUp: 'لم يتم حفظ أي نسخة على Google Drive بعد.',
+      driveNextBackupLabel: (date: string) => `النسخة التلقائية القادمة: ${date}`,
+      driveReauthWarning:
+        'انتهت صلاحية الربط: اضغط على « نسخ الآن على Drive » لتجديد الموافقة واستئناف النسخ التلقائي.',
+      driveWebClientLabel: 'معرّف Google OAuth Client ID (للمتصفح Web)',
+      driveWebClientPlaceholder: '123456789-xxxx.apps.googleusercontent.com',
+      driveWebClientHint:
+        'مطلوب في المتصفح فقط (تطبيق أندرويد يستخدم الربط المباشر عبر Google Play Services).',
+      driveClientSavedToast: 'تم حفظ معرّف Google Client ID.',
+      driveConnectedToast: (email: string) =>
+        email
+          ? `تم ربط Google Drive (${email}) وتفعيل النسخ التلقائي كل 10 ساعات!`
+          : 'تم ربط Google Drive وتفعيل النسخ التلقائي كل 10 ساعات!',
+      driveDisconnectedToast: 'تم فصل حساب Google Drive.',
+      driveBackedUpToast: 'تم حفظ النسخة الاحتياطية على Google Drive بنجاح!',
+      driveScheduleEnabledToast: 'تم تفعيل النسخ التلقائي على Google Drive كل 10 ساعات.',
+      driveScheduleDisabledToast: 'تم إيقاف النسخ التلقائي مؤقتاً.',
     },
     onboarding: {
       badge: 'حساب جديد',
@@ -1067,6 +1133,8 @@ export const UI_TEXT = {
       submittingBtn: 'جاري إنشاء الحساب...',
       orDivider: 'أو',
       restoreBtn: 'لديك حساب سابق؟ استرجاع نسخة احتياطية (.json)',
+      restoreDriveBtn: 'استرجاع النسخة من Google Drive',
+      restoringDriveBtn: 'جاري الاتصال بـ Google Drive...',
       privacyNote: 'خصوصية تامة وبدون إنترنت: جميع بياناتك تبقى محفوظة في هاتفك فقط.',
     },
     pin: {

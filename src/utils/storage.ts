@@ -1,3 +1,7 @@
+import {
+  DEFAULT_GOOGLE_WEB_CLIENT_ID,
+  DRIVE_AUTO_BACKUP_INTERVAL_HOURS,
+} from '../config/driveConfig.ts';
 import { DEFAULT_UPDATE_MANIFEST_URL } from '../config/updateConfig.ts';
 import type {
   AccountUsageType,
@@ -5,6 +9,7 @@ import type {
   AppSettings,
   Contact,
   ContactCategory,
+  DriveBackupSettings,
   LedgerDatabase,
   PaymentMethod,
   Transaction,
@@ -42,6 +47,14 @@ const VALID_METHODS = new Set<PaymentMethod>([
   'Marchandise',
 ]);
 
+export const DEFAULT_DRIVE_BACKUP: DriveBackupSettings = {
+  enabled: false,
+  connected: false,
+  email: '',
+  intervalHours: DRIVE_AUTO_BACKUP_INTERVAL_HOURS,
+  webClientId: DEFAULT_GOOGLE_WEB_CLIENT_ID,
+};
+
 export const DEFAULT_SETTINGS: AppSettings = {
   pinHash: null,
   pinEnabled: false,
@@ -58,6 +71,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   notificationsEnabled: false,
   updateManifestUrl: DEFAULT_UPDATE_MANIFEST_URL,
   accountRegistered: false,
+  driveBackup: { ...DEFAULT_DRIVE_BACKUP },
 };
 
 function offsetDaysISO(daysOffset: number, time = '10:30'): { date: string; datetime: string } {
@@ -339,6 +353,37 @@ export function normalizeLoadedDb(raw: unknown): LedgerDatabase | null {
             (rawSettings.pinEnabled && rawSettings.pinHash)
         );
 
+  const rawDrive =
+    rawSettings.driveBackup && typeof rawSettings.driveBackup === 'object'
+      ? (rawSettings.driveBackup as Partial<DriveBackupSettings>)
+      : undefined;
+
+  const driveBackup: DriveBackupSettings = {
+    enabled: Boolean(rawDrive?.enabled && rawDrive?.connected),
+    connected: Boolean(rawDrive?.connected),
+    email: typeof rawDrive?.email === 'string' ? rawDrive.email.trim() : '',
+    intervalHours:
+      typeof rawDrive?.intervalHours === 'number' &&
+      Number.isFinite(rawDrive.intervalHours) &&
+      rawDrive.intervalHours >= 1
+        ? Math.round(rawDrive.intervalHours)
+        : DRIVE_AUTO_BACKUP_INTERVAL_HOURS,
+    fileId: typeof rawDrive?.fileId === 'string' && rawDrive.fileId.trim() ? rawDrive.fileId.trim() : undefined,
+    lastBackupAt:
+      typeof rawDrive?.lastBackupAt === 'string' && rawDrive.lastBackupAt.trim()
+        ? rawDrive.lastBackupAt.trim()
+        : undefined,
+    lastError:
+      typeof rawDrive?.lastError === 'string' && rawDrive.lastError.trim()
+        ? rawDrive.lastError.trim()
+        : undefined,
+    needsReauth: Boolean(rawDrive?.needsReauth),
+    webClientId:
+      typeof rawDrive?.webClientId === 'string'
+        ? rawDrive.webClientId.trim()
+        : DEFAULT_GOOGLE_WEB_CLIENT_ID,
+  };
+
   const settings: AppSettings = {
     ...DEFAULT_SETTINGS,
     ...rawSettings,
@@ -376,6 +421,7 @@ export function normalizeLoadedDb(raw: unknown): LedgerDatabase | null {
         : undefined,
     accountRegistered: inferredRegistered,
     account,
+    driveBackup,
   };
 
   return {

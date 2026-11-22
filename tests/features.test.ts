@@ -40,6 +40,12 @@ import {
   isValidUpdateUrl,
   parseUpdateManifest,
 } from '../src/utils/appUpdater.ts';
+import {
+  computeNextDriveBackupIso,
+  formatDriveError,
+  isDriveBackupDue,
+  isValidGoogleClientId,
+} from '../src/utils/googleDriveBackup.ts';
 
 function makeContact(overrides: Partial<Contact> = {}): Contact {
   const now = '2025-05-01T10:00:00Z';
@@ -378,4 +384,52 @@ test('appUpdater: semver comparison, HTTPS validation, and update.json manifest 
     () => parseUpdateManifest({ version: 'bad' }, 'ar'),
     /رقم الإصدار/
   );
+});
+
+test('googleDriveBackup: 10-hour auto-backup scheduling, client ID validation, error localization & persistence', () => {
+  const baseMs = Date.parse('2026-11-22T08:00:00.000Z');
+  const nineHours59MinLater = baseMs + (10 * 60 - 1) * 60_000;
+  const tenHoursLater = baseMs + 10 * 3_600_000;
+
+  assert.equal(isDriveBackupDue(undefined, 10, baseMs), true);
+  assert.equal(isDriveBackupDue('2026-11-22T08:00:00.000Z', 10, nineHours59MinLater), false);
+  assert.equal(isDriveBackupDue('2026-11-22T08:00:00.000Z', 10, tenHoursLater), true);
+
+  assert.equal(
+    computeNextDriveBackupIso('2026-11-22T08:00:00.000Z', 10),
+    '2026-11-22T18:00:00.000Z'
+  );
+  assert.equal(computeNextDriveBackupIso(undefined, 10), null);
+
+  assert.equal(
+    isValidGoogleClientId('1234567890-abcdefg123.apps.googleusercontent.com'),
+    true
+  );
+  assert.equal(isValidGoogleClientId('not-a-valid-client-id'), false);
+
+  assert.match(formatDriveError(new Error('NO_DRIVE_BACKUP_FOUND'), 'ar'), /Google Drive/);
+  assert.match(formatDriveError(new Error('AUTH_CANCELLED'), 'fr'), /annulée/);
+
+  const normalized = normalizeLoadedDb({
+    version: 1,
+    contacts: [],
+    transactions: [],
+    settings: {
+      accountRegistered: true,
+      driveBackup: {
+        connected: true,
+        enabled: true,
+        email: 'shop@gmail.com',
+        intervalHours: 10,
+        fileId: 'drive-file-42',
+        lastBackupAt: '2026-11-22T08:00:00.000Z',
+      },
+    },
+  });
+  assert.ok(normalized);
+  assert.equal(normalized.settings.driveBackup?.connected, true);
+  assert.equal(normalized.settings.driveBackup?.enabled, true);
+  assert.equal(normalized.settings.driveBackup?.intervalHours, 10);
+  assert.equal(normalized.settings.driveBackup?.email, 'shop@gmail.com');
+  assert.equal(normalized.settings.driveBackup?.fileId, 'drive-file-42');
 });
