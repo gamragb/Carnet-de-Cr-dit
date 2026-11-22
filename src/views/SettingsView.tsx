@@ -379,6 +379,13 @@ export function SettingsView({
     );
     onMarkBackedUp();
     showToast(s.jsonToast);
+    if (
+      hasEmailConfigured &&
+      !emailBackupBusy &&
+      (typeof navigator === 'undefined' || navigator.onLine !== false)
+    ) {
+      onSendEmailBackupNow();
+    }
   };
 
   const handleOpenEncryptedExport = () => {
@@ -1421,7 +1428,7 @@ export function SettingsView({
         <input
           ref={jsonInputRef}
           type="file"
-          accept=".json,application/json"
+          accept=".json,.txt,application/json,text/plain"
           className="hidden"
           onChange={handleJsonFileChosen}
         />

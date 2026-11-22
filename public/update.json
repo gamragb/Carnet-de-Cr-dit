@@ -1,10 +1,10 @@
 {
-  "version": "1.2.1",
+  "version": "1.2.2",
   "minNativeVersion": "1.0.0",
-  "bundleUrl": "https://gamragb.github.io/Carnet-de-Cr-dit/bundle-1.2.1.zip",
+  "bundleUrl": "https://gamragb.github.io/Carnet-de-Cr-dit/bundle-1.2.2.zip",
   "apkUrl": "",
   "playStoreUrl": "https://play.google.com/store/apps/details?id=ma.carnetcredit.app",
   "mandatory": false,
-  "notesFr": "v1.2.1 : Correction de l’écran blanc après mise à jour interne (OTA), sauvegarde automatique par email toutes les 10 h, et améliorations de stabilité.",
-  "notesAr": "الإصدار 1.2.1: إصلاح مشكلة الشاشة البيضاء بعد التحديث من داخل التطبيق (OTA)، والنسخ الاحتياطي التلقائي للإيميل كل 10 ساعات، وتحسينات الأداء."
+  "notesFr": "v1.2.2 : Fichier de sauvegarde .json directement joint en pièce jointe dans chaque email (auto 10 h et bouton Sauvegarde JSON).",
+  "notesAr": "الإصدار 1.2.2: إرسال ملف النسخة الاحتياطية (.json) مرفقاً مباشرة داخل البريد الإلكتروني (تلقائياً كل 10 ساعات وعند الضغط على نسخة JSON)."
 }

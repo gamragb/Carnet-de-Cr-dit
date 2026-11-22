@@ -111,6 +111,7 @@ public class GoogleDrivePlugin extends Plugin {
             DriveBackupWorker.cancelPeriodicBackup(ctx);
             DriveRestHelper.deleteSnapshot(ctx);
             DriveRestHelper.deleteEmailPayload(ctx);
+            DriveRestHelper.deleteEmailAttachment(ctx);
             DriveRestHelper.getPrefs(ctx).edit().clear().apply();
 
             JSObject ret = new JSObject();
@@ -123,6 +124,7 @@ public class GoogleDrivePlugin extends Plugin {
     public void sendEmailNow(PluginCall call) {
         String email = call.getString("email", "");
         String payloadJson = call.getString("payloadJson", "");
+        String attachmentJson = call.getString("attachmentJson", "");
         if (email == null || email.trim().isEmpty()) {
             call.reject("INVALID_EMAIL");
             return;
@@ -133,13 +135,18 @@ public class GoogleDrivePlugin extends Plugin {
         }
 
         final String cleanEmail = email.trim();
+        final String cleanAttachment = attachmentJson != null ? attachmentJson : "";
         executor.execute(() -> {
             try {
                 Context ctx = getContext();
                 DriveRestHelper.writeEmailPayload(ctx, payloadJson);
+                if (!cleanAttachment.trim().isEmpty()) {
+                    DriveRestHelper.writeEmailAttachment(ctx, cleanAttachment);
+                }
                 DriveRestHelper.EmailSendResult sent = DriveRestHelper.sendBackupToEmail(
                     cleanEmail,
-                    payloadJson
+                    payloadJson,
+                    cleanAttachment
                 );
 
                 DriveRestHelper.getPrefs(ctx).edit()
@@ -212,6 +219,7 @@ public class GoogleDrivePlugin extends Plugin {
         String email = call.getString("email", "");
         int intervalHours = Math.max(1, call.getInt("intervalHours", DriveRestHelper.DEFAULT_INTERVAL_HOURS));
         String payloadJson = call.getString("payloadJson", "");
+        String attachmentJson = call.getString("attachmentJson", "");
 
         executor.execute(() -> {
             try {
@@ -224,6 +232,12 @@ public class GoogleDrivePlugin extends Plugin {
                     DriveRestHelper.writeEmailPayload(ctx, payloadJson);
                 } else if (!effectiveEnabled) {
                     DriveRestHelper.deleteEmailPayload(ctx);
+                }
+
+                if (attachmentJson != null && !attachmentJson.trim().isEmpty()) {
+                    DriveRestHelper.writeEmailAttachment(ctx, attachmentJson);
+                } else if (!effectiveEnabled) {
+                    DriveRestHelper.deleteEmailAttachment(ctx);
                 }
 
                 prefs.edit()

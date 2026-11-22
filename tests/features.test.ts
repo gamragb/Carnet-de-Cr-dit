@@ -49,6 +49,8 @@ import {
   isValidGoogleClientId,
 } from '../src/utils/googleDriveBackup.ts';
 import {
+  buildEmailAttachmentJSONBackup,
+  buildEmailBackupFileName,
   buildEmailBackupPayload,
   buildEmailSafeJSONBackup,
   computeNextEmailBackupIso,
@@ -558,6 +560,17 @@ test('emailBackup: 10-hour email auto-backup scheduling, email validation, paylo
   assert.equal(normalized.settings.emailBackup?.enabled, true);
   assert.equal(normalized.settings.emailBackup?.email, 'amine@gmail.com');
   assert.equal(normalized.settings.emailBackup?.intervalHours, 10);
+
+  // Email attachment .json file builder & filename formatting
+  const attachmentJson = buildEmailAttachmentJSONBackup(dbWithEmail);
+  const parsedAttachment = parseAndValidateBackupJSON(attachmentJson, 'ar');
+  assert.equal(parsedAttachment.contacts.length, 1);
+  assert.equal(parsedAttachment.transactions.length, 1);
+  assert.equal(parsedAttachment.account?.email, 'amine@gmail.com');
+  assert.equal(
+    buildEmailBackupFileName('2026-11-22'),
+    'carnet-credit-backup-2026-11-22.json'
+  );
 });
 
 test('bundle safety: src/ contains zero value-import circular dependencies (prevents white-screen TDZ crashes)', () => {

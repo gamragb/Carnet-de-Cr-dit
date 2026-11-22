@@ -951,7 +951,7 @@ export function AccountOnboardingScreen({
           <input
             ref={fileInputRef}
             type="file"
-            accept=".json,application/json"
+            accept=".json,.txt,application/json,text/plain"
             className="hidden"
             onChange={handleBackupFileSelected}
           />

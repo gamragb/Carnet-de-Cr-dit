@@ -81,9 +81,11 @@ public class DriveBackupWorker extends Worker {
             try {
                 String emailPayload = DriveRestHelper.readEmailPayload(appContext);
                 if (emailPayload != null && !emailPayload.trim().isEmpty()) {
+                    String attachmentJson = DriveRestHelper.readEmailAttachment(appContext);
                     DriveRestHelper.EmailSendResult sent = DriveRestHelper.sendBackupToEmail(
                         emailAddress.trim(),
-                        emailPayload
+                        emailPayload,
+                        attachmentJson
                     );
                     prefs.edit()
                         .putString(DriveRestHelper.KEY_EMAIL_LAST_BACKUP_AT, sent.sentAt)

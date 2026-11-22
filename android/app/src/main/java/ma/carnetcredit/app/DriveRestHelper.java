@@ -17,6 +17,7 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.Iterator;
 import java.util.Locale;
 import java.util.TimeZone;
 import org.json.JSONArray;
@@ -45,6 +46,7 @@ public final class DriveRestHelper {
     public static final String BACKUP_FILE_NAME = "carnet-credit-auto-backup.json";
     private static final String SNAPSHOT_FILE_NAME = "carnet_drive_backup_snapshot.json";
     private static final String EMAIL_PAYLOAD_FILE_NAME = "carnet_email_backup_payload.json";
+    private static final String EMAIL_ATTACHMENT_FILE_NAME = "carnet_email_backup_attachment.json";
 
     private DriveRestHelper() {}
 
@@ -147,6 +149,66 @@ public final class DriveRestHelper {
         }
     }
 
+    public static void writeEmailAttachment(Context context, String attachmentJson) throws IOException {
+        File dir = context.getApplicationContext().getFilesDir();
+        File tmp = new File(dir, EMAIL_ATTACHMENT_FILE_NAME + ".tmp");
+        File target = new File(dir, EMAIL_ATTACHMENT_FILE_NAME);
+        try (FileOutputStream fos = new FileOutputStream(tmp)) {
+            fos.write(attachmentJson.getBytes(StandardCharsets.UTF_8));
+            fos.getFD().sync();
+        }
+        if (target.exists() && !target.delete()) {
+            // Fall through
+        }
+        if (!tmp.renameTo(target)) {
+            try (FileOutputStream fos = new FileOutputStream(target)) {
+                fos.write(attachmentJson.getBytes(StandardCharsets.UTF_8));
+            }
+            //noinspection ResultOfMethodCallIgnored
+            tmp.delete();
+        }
+    }
+
+    public static String readEmailAttachment(Context context) throws IOException {
+        File target = new File(context.getApplicationContext().getFilesDir(), EMAIL_ATTACHMENT_FILE_NAME);
+        if (!target.exists() || target.length() == 0) {
+            return null;
+        }
+        try (FileInputStream fis = new FileInputStream(target);
+             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = fis.read(buf)) != -1) {
+                out.write(buf, 0, n);
+            }
+            return out.toString(StandardCharsets.UTF_8.name());
+        }
+    }
+
+    public static void deleteEmailAttachment(Context context) {
+        File target = new File(context.getApplicationContext().getFilesDir(), EMAIL_ATTACHMENT_FILE_NAME);
+        if (target.exists()) {
+            //noinspection ResultOfMethodCallIgnored
+            target.delete();
+        }
+    }
+
+    private static String extractAttachmentJsonFallback(String payloadJson) {
+        if (payloadJson == null || payloadJson.trim().isEmpty()) {
+            return "";
+        }
+        try {
+            JSONObject obj = new JSONObject(payloadJson);
+            String ar = obj.optString("كود الاسترجاع الكامل (انسخه للاسترجاع في التطبيق)", "").trim();
+            if (!ar.isEmpty()) return ar;
+            String fr = obj.optString("Code JSON complet (à copier-coller pour restaurer dans l’application)", "").trim();
+            if (!fr.isEmpty()) return fr;
+        } catch (Exception ignored) {
+            // Ignore
+        }
+        return "";
+    }
+
     public static String refreshEmailPayloadTimestamp(String payloadJson, String utcIso) {
         if (payloadJson == null || payloadJson.trim().isEmpty()) {
             return payloadJson;
@@ -175,15 +237,114 @@ public final class DriveRestHelper {
     }
 
     public static EmailSendResult sendBackupToEmail(String targetEmail, String payloadJson) throws Exception {
+        return sendBackupToEmail(targetEmail, payloadJson, null);
+    }
+
+    public static EmailSendResult sendBackupToEmail(
+        String targetEmail,
+        String payloadJson,
+        String attachmentJson
+    ) throws Exception {
         String cleanEmail = targetEmail != null ? targetEmail.trim() : "";
         if (cleanEmail.isEmpty()) {
             throw new IOException("INVALID_EMAIL");
         }
         String nowIso = nowUtcIso();
+        String datePart = nowIso.length() >= 10 ? nowIso.substring(0, 10) : nowIso;
         String freshPayload = refreshEmailPayloadTimestamp(payloadJson, nowIso);
-        String urlStr = "https://formsubmit.co/ajax/" + URLEncoder.encode(cleanEmail, "UTF-8");
-        byte[] body = freshPayload.getBytes(StandardCharsets.UTF_8);
+        String resolvedAttachment = (attachmentJson != null && !attachmentJson.trim().isEmpty())
+            ? attachmentJson.trim()
+            : extractAttachmentJsonFallback(freshPayload);
 
+        String urlStr = "https://formsubmit.co/ajax/" + URLEncoder.encode(cleanEmail, "UTF-8");
+
+        // 1. Primary: multipart/form-data with downloadable `.json` backup file attached
+        if (!resolvedAttachment.isEmpty()) {
+            try {
+                byte[] mpJson = buildFormSubmitMultipartBody(
+                    freshPayload,
+                    resolvedAttachment,
+                    "carnet-credit-backup-" + datePart + ".json",
+                    "application/json",
+                    "----CarnetCreditJsonBoundary" + System.currentTimeMillis()
+                );
+                String boundary = extractMultipartBoundary(mpJson);
+                return postFormSubmit(urlStr, "multipart/form-data; boundary=" + boundary, mpJson, nowIso);
+            } catch (Exception primaryEx) {
+                // 2. Fallback: retry attachment as `.txt` containing identical JSON backup
+                try {
+                    byte[] mpTxt = buildFormSubmitMultipartBody(
+                        freshPayload,
+                        resolvedAttachment,
+                        "carnet-credit-backup-" + datePart + ".txt",
+                        "text/plain",
+                        "----CarnetCreditTxtBoundary" + System.currentTimeMillis()
+                    );
+                    String boundary = extractMultipartBoundary(mpTxt);
+                    return postFormSubmit(urlStr, "multipart/form-data; boundary=" + boundary, mpTxt, nowIso);
+                } catch (Exception ignored) {
+                    // Fall through to JSON body
+                }
+            }
+        }
+
+        // 3. Final fallback: send standard JSON body (includes inline backup code)
+        byte[] body = freshPayload.getBytes(StandardCharsets.UTF_8);
+        return postFormSubmit(urlStr, "application/json; charset=UTF-8", body, nowIso);
+    }
+
+    private static byte[] buildFormSubmitMultipartBody(
+        String payloadJson,
+        String attachmentContent,
+        String fileName,
+        String mimeType,
+        String boundary
+    ) throws Exception {
+        JSONObject obj = new JSONObject(payloadJson);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] crlf = "\r\n".getBytes(StandardCharsets.UTF_8);
+
+        Iterator<String> keys = obj.keys();
+        while (keys.hasNext()) {
+            String key = keys.next();
+            String safeKey = key.replace("\"", "'").replace("\r", "").replace("\n", "");
+            String val = obj.optString(key, "");
+            out.write(("--" + boundary + "\r\n").getBytes(StandardCharsets.UTF_8));
+            out.write(
+                ("Content-Disposition: form-data; name=\"" + safeKey + "\"\r\n\r\n")
+                    .getBytes(StandardCharsets.UTF_8)
+            );
+            out.write(val.getBytes(StandardCharsets.UTF_8));
+            out.write(crlf);
+        }
+
+        out.write(("--" + boundary + "\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write(
+            ("Content-Disposition: form-data; name=\"attachment\"; filename=\"" + fileName + "\"\r\n")
+                .getBytes(StandardCharsets.UTF_8)
+        );
+        out.write(("Content-Type: " + mimeType + "; charset=UTF-8\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write(attachmentContent.getBytes(StandardCharsets.UTF_8));
+        out.write(crlf);
+        out.write(("--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
+        return out.toByteArray();
+    }
+
+    private static String extractMultipartBoundary(byte[] multipartBody) {
+        int lineEnd = 0;
+        while (lineEnd < multipartBody.length && multipartBody[lineEnd] != '\r' && multipartBody[lineEnd] != '\n') {
+            lineEnd++;
+        }
+        String firstLine = new String(multipartBody, 0, lineEnd, StandardCharsets.UTF_8);
+        return firstLine.startsWith("--") ? firstLine.substring(2) : firstLine;
+    }
+
+    private static EmailSendResult postFormSubmit(
+        String urlStr,
+        String contentType,
+        byte[] body,
+        String nowIso
+    ) throws Exception {
         HttpURLConnection conn = null;
         try {
             URL url = new URL(urlStr);
@@ -191,7 +352,7 @@ public final class DriveRestHelper {
             conn.setConnectTimeout(20000);
             conn.setReadTimeout(30000);
             conn.setRequestMethod("POST");
-            conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+            conn.setRequestProperty("Content-Type", contentType);
             conn.setRequestProperty("Accept", "application/json");
             conn.setRequestProperty("Origin", "https://gamragb.github.io");
             conn.setRequestProperty("Referer", "https://gamragb.github.io/Carnet-de-Cr-dit/");
@@ -215,7 +376,6 @@ public final class DriveRestHelper {
             if ((code < 200 || code >= 300) && !needsActivation) {
                 throw new IOException("Email delivery error (" + code + "): " + respBody);
             }
-            // Check JSON body success=false as well
             try {
                 JSONObject jsonResp = new JSONObject(respBody);
                 Object successVal = jsonResp.opt("success");

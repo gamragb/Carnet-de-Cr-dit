@@ -8,6 +8,7 @@ import { isNativeApp } from './nativePlatform.ts';
 
 export { EMAIL_AUTO_BACKUP_INTERVAL_HOURS, extractBackupJsonFromText };
 const MAX_EMAIL_JSON_BYTES = 180_000;
+const MAX_EMAIL_ATTACHMENT_BYTES = 4_000_000;
 
 interface NativeEmailBackupPlugin {
   configureEmailBackup?: (options: {
@@ -15,6 +16,7 @@ interface NativeEmailBackupPlugin {
     email: string;
     intervalHours: number;
     payloadJson: string;
+    attachmentJson?: string;
   }) => Promise<{ enabled: boolean; email: string; intervalHours: number }>;
   getEmailStatus?: () => Promise<{
     enabled: boolean;
@@ -27,6 +29,7 @@ interface NativeEmailBackupPlugin {
   sendEmailNow?: (options: {
     email: string;
     payloadJson: string;
+    attachmentJson?: string;
   }) => Promise<{ sentAt: string; email: string; needsActivation: boolean }>;
   clearAllBackups?: () => Promise<{ cleared: boolean }>;
 }
@@ -100,6 +103,28 @@ export function buildEmailSafeJSONBackup(db: LedgerDatabase): string {
     ),
   };
   return buildJSONBackup(lightDb);
+}
+
+/**
+ * Builds the downloadable `.json` backup file attached directly to the email.
+ * Keeps receipt images when total size fits safely under the email attachment limit (~4 MB).
+ */
+export function buildEmailAttachmentJSONBackup(db: LedgerDatabase): string {
+  const full = buildJSONBackup(db);
+  if (full.length <= MAX_EMAIL_ATTACHMENT_BYTES) {
+    return full;
+  }
+  const lightDb: LedgerDatabase = {
+    ...db,
+    transactions: db.transactions.map((tx) =>
+      tx.attachmentDataUrl ? { ...tx, attachmentDataUrl: undefined } : tx
+    ),
+  };
+  return buildJSONBackup(lightDb);
+}
+
+export function buildEmailBackupFileName(dateISO: string = getTodayISODate()): string {
+  return `carnet-credit-backup-${dateISO}.json`;
 }
 
 export function buildEmailBackupPayload(
@@ -229,6 +254,7 @@ export async function syncNativeEmailBackupConfig(options: {
   email: string;
   intervalHours: number;
   payloadJson: string;
+  attachmentJson?: string;
 }): Promise<void> {
   const plugin = await getNativeEmailPlugin();
   if (!plugin?.configureEmailBackup) return;
@@ -266,11 +292,46 @@ export async function clearAllNativeBackups(): Promise<void> {
         email: '',
         intervalHours: EMAIL_AUTO_BACKUP_INTERVAL_HOURS,
         payloadJson: '',
+        attachmentJson: '',
       });
     } catch {
       // Ignore cleanup errors
     }
   }
+}
+
+async function postFormSubmitRequest(
+  endpoint: string,
+  init: RequestInit
+): Promise<{ ok: boolean; needsActivation: boolean; message: string; status: number }> {
+  const res = await fetch(endpoint, init);
+  let data: { success?: boolean | string; message?: string } = {};
+  try {
+    data = (await res.json()) as { success?: boolean | string; message?: string };
+  } catch {
+    data = {};
+  }
+  const msg = String(data.message ?? '');
+  const needsActivation =
+    /activat/i.test(msg) || /confirm/i.test(msg) || /verify/i.test(msg);
+  const explicitFalse = data.success === false || data.success === 'false';
+  const ok = (res.ok && !explicitFalse) || needsActivation;
+  return { ok, needsActivation, message: msg, status: res.status };
+}
+
+function buildFormSubmitMultipart(
+  payload: Record<string, string>,
+  attachmentJson: string,
+  fileName: string,
+  mimeType: string
+): FormData {
+  const formData = new FormData();
+  for (const [key, value] of Object.entries(payload)) {
+    formData.append(key, value);
+  }
+  const blob = new Blob([attachmentJson], { type: mimeType });
+  formData.append('attachment', blob, fileName);
+  return formData;
 }
 
 export async function sendBackupToEmail(options: {
@@ -285,14 +346,17 @@ export async function sendBackupToEmail(options: {
 
   const payload = buildEmailBackupPayload(options.db, cleanEmail, options.lang);
   const payloadJson = JSON.stringify(payload);
+  const attachmentJson = buildEmailAttachmentJSONBackup(options.db);
+  const jsonFileName = buildEmailBackupFileName();
 
   // On native Android, route via Java HttpURLConnection so proper Origin/Referer headers
-  // are sent instead of WebView's https://localhost origin (which formsubmit.co may reject).
+  // and multipart .json file attachments are sent cleanly instead of WebView's https://localhost.
   const nativePlugin = await getNativeEmailPlugin();
   if (nativePlugin?.sendEmailNow) {
     const nativeRes = await nativePlugin.sendEmailNow({
       email: cleanEmail,
       payloadJson,
+      attachmentJson,
     });
     return {
       sentAt: nativeRes.sentAt || new Date().toISOString(),
@@ -301,43 +365,61 @@ export async function sendBackupToEmail(options: {
     };
   }
 
-  const res = await fetch(
-    `https://formsubmit.co/ajax/${encodeURIComponent(cleanEmail)}`,
-    {
+  const endpoint = `https://formsubmit.co/ajax/${encodeURIComponent(cleanEmail)}`;
+
+  // 1. Primary: send multipart/form-data with real downloadable `.json` backup file attached
+  let result = await postFormSubmitRequest(endpoint, {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+    body: buildFormSubmitMultipart(
+      payload,
+      attachmentJson,
+      jsonFileName,
+      'application/json;charset=utf-8'
+    ),
+  });
+
+  // 2. Fallback if `.json` extension rejected: retry with `.txt` attachment containing identical JSON
+  if (!result.ok) {
+    const txtFileName = jsonFileName.replace(/\.json$/i, '.txt');
+    const txtResult = await postFormSubmitRequest(endpoint, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
-      body: payloadJson,
+      headers: { Accept: 'application/json' },
+      body: buildFormSubmitMultipart(
+        payload,
+        attachmentJson,
+        txtFileName,
+        'text/plain;charset=utf-8'
+      ),
+    });
+    if (txtResult.ok) {
+      result = txtResult;
+    } else {
+      // 3. Final fallback: send standard JSON payload (inline copy-paste backup code still included)
+      const jsonOnlyResult = await postFormSubmitRequest(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: payloadJson,
+      });
+      if (jsonOnlyResult.ok) {
+        result = jsonOnlyResult;
+      } else {
+        result = jsonOnlyResult.message ? jsonOnlyResult : result;
+      }
     }
-  );
-
-  let data: { success?: boolean | string; message?: string } = {};
-  try {
-    data = (await res.json()) as { success?: boolean | string; message?: string };
-  } catch {
-    data = {};
   }
 
-  const msg = String(data.message ?? '');
-  const needsActivation =
-    /activat/i.test(msg) || /confirm/i.test(msg) || /verify/i.test(msg);
-
-  if (!res.ok && !needsActivation) {
-    throw new Error(msg || `Email delivery error (${res.status})`);
-  }
-  if (
-    (data.success === false || data.success === 'false') &&
-    !needsActivation
-  ) {
-    throw new Error(msg || 'Email delivery rejected');
+  if (!result.ok) {
+    throw new Error(result.message || `Email delivery error (${result.status})`);
   }
 
   const sentAt = new Date().toISOString();
   return {
     sentAt,
     email: cleanEmail,
-    needsActivation,
+    needsActivation: result.needsActivation,
   };
 }

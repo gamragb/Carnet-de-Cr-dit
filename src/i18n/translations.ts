@@ -549,7 +549,7 @@ export const UI_TEXT = {
       emailBackupToggleTitle: (hours: number) =>
         `Envoyer une copie à mon email toutes les ${hours} h`,
       emailBackupToggleDesc:
-        'Envoie un récapitulatif complet de vos comptes + le code de restauration dans votre boîte mail',
+        'Envoie votre fichier de sauvegarde .json en pièce jointe + un récapitulatif complet dans votre boîte mail',
       emailBackupSendNowBtn: 'Envoyer à mon email',
       emailBackupSendingBtn: 'Envoi en cours...',
       emailBackupPasteRestoreBtn: 'Restaurer depuis email',
@@ -1191,7 +1191,7 @@ export const UI_TEXT = {
       emailBackupToggleTitle: (hours: number) =>
         `إرسال نسخة تلقائية للإيميل كل ${hours} ساعات`,
       emailBackupToggleDesc:
-        'يرسل ملخصاً كاملاً لحساباتك وأرصدتك مع كود الاسترجاع إلى بريدك الإلكتروني ليبقى محفوظاً هناك',
+        'يرسل ملف النسخة الاحتياطية (.json) مرفقاً داخل الإيميل مع ملخص كامل لحساباتك وأرصدتك ليبقى محفوظاً لديك',
       emailBackupSendNowBtn: 'إرسال نسخة للإيميل الآن',
       emailBackupSendingBtn: 'جاري الإرسال...',
       emailBackupPasteRestoreBtn: 'استرجاع نسخة من الإيميل',

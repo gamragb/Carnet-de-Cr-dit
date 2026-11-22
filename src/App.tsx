@@ -57,6 +57,7 @@ import {
 } from './utils/exportImport.ts';
 import {
   EMAIL_AUTO_BACKUP_INTERVAL_HOURS,
+  buildEmailAttachmentJSONBackup,
   buildEmailBackupPayload,
   clearAllNativeBackups,
   formatEmailBackupError,
@@ -1137,6 +1138,18 @@ function LedgerApp() {
     );
     handleMarkBackedUp();
     showToast(t.settingsView.jsonToast);
+    const emailAddr = (
+      db.settings.emailBackup?.email ||
+      db.settings.account?.email ||
+      ''
+    ).trim();
+    if (
+      isValidEmailAddress(emailAddr) &&
+      !emailBackupBusy &&
+      (typeof navigator === 'undefined' || navigator.onLine !== false)
+    ) {
+      void handleSendEmailBackupNow(emailAddr);
+    }
   };
 
   const handleRestoreBackup = (
@@ -1534,11 +1547,13 @@ function LedgerApp() {
       const payloadJson = enabled
         ? JSON.stringify(buildEmailBackupPayload(dbRef.current, emailAddr, dbRef.current.settings.language))
         : '';
+      const attachmentJson = enabled ? buildEmailAttachmentJSONBackup(dbRef.current) : '';
       void syncNativeEmailBackupConfig({
         enabled,
         email: emailAddr,
         intervalHours,
         payloadJson,
+        attachmentJson,
       });
     }, 1500);
     return () => window.clearTimeout(timer);
