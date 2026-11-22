@@ -1,4 +1,4 @@
-import { Capacitor, registerPlugin } from '@capacitor/core';
+import { Capacitor, CapacitorHttp, registerPlugin } from '@capacitor/core';
 import { EMAIL_AUTO_BACKUP_INTERVAL_HOURS } from '../config/driveConfig.ts';
 import type { AppLanguage, LedgerDatabase } from '../types/ledger.ts';
 import { buildJSONBackup, extractBackupJsonFromText } from './exportImport.ts';
@@ -232,14 +232,18 @@ export function formatEmailBackupError(err: unknown, lang: AppLanguage): string 
       : 'Veuillez saisir une adresse email valide (ex : nom@gmail.com).';
   }
   if (
-    raw.includes('Failed to fetch') ||
-    raw.includes('NetworkError') ||
-    raw.includes('Unable to resolve host') ||
-    raw.includes('offline')
+    /Failed to fetch|NetworkError|Unable to resolve host|UnknownHostException|No address associated|ConnectException|SocketTimeoutException|timeout|offline/i.test(
+      raw
+    )
   ) {
     return isAr
-      ? 'تعذر الاتصال بالإنترنت لإرسال النسخة. سيرسلها التطبيق تلقائياً فور توفر الإنترنت.'
-      : 'Connexion Internet indisponible. La copie sera envoyée automatiquement dès le retour en ligne.';
+      ? 'تعذر الاتصال بالإنترنت لإرسال النسخة. تحقق من الشبكة وسيرسلها التطبيق تلقائياً فور توفر الإنترنت.'
+      : 'Connexion Internet indisponible ou lente. La copie sera envoyée automatiquement dès le retour en ligne.';
+  }
+  if (/not implemented|UNIMPLEMENTED/i.test(raw)) {
+    return isAr
+      ? 'تعذر الإرسال عبر الإضافة القديمة، أعد المحاولة الآن.'
+      : "Échec de l'envoi natif, veuillez réessayer.";
   }
   return (
     raw ||
@@ -300,23 +304,139 @@ export async function clearAllNativeBackups(): Promise<void> {
   }
 }
 
-async function postFormSubmitRequest(
-  endpoint: string,
-  init: RequestInit
-): Promise<{ ok: boolean; needsActivation: boolean; message: string; status: number }> {
-  const res = await fetch(endpoint, init);
+function parseFormSubmitResponse(
+  status: number,
+  rawData: unknown
+): { ok: boolean; needsActivation: boolean; message: string; status: number } {
   let data: { success?: boolean | string; message?: string } = {};
-  try {
-    data = (await res.json()) as { success?: boolean | string; message?: string };
-  } catch {
-    data = {};
+  if (rawData && typeof rawData === 'object') {
+    data = rawData as { success?: boolean | string; message?: string };
+  } else if (typeof rawData === 'string') {
+    try {
+      data = JSON.parse(rawData) as { success?: boolean | string; message?: string };
+    } catch {
+      data = { message: rawData.slice(0, 200) };
+    }
   }
   const msg = String(data.message ?? '');
   const needsActivation =
     /activat/i.test(msg) || /confirm/i.test(msg) || /verify/i.test(msg);
   const explicitFalse = data.success === false || data.success === 'false';
-  const ok = (res.ok && !explicitFalse) || needsActivation;
-  return { ok, needsActivation, message: msg, status: res.status };
+  const httpOk = status >= 200 && status < 300;
+  const ok = (httpOk && !explicitFalse) || needsActivation;
+  return { ok, needsActivation, message: msg, status };
+}
+
+async function postFormSubmitRequest(
+  endpoint: string,
+  init: RequestInit
+): Promise<{ ok: boolean; needsActivation: boolean; message: string; status: number }> {
+  const res = await fetch(endpoint, init);
+  let rawData: unknown = {};
+  try {
+    rawData = await res.text();
+  } catch {
+    rawData = {};
+  }
+  return parseFormSubmitResponse(res.status, rawData);
+}
+
+function buildRawMultipartBody(
+  payload: Record<string, string>,
+  attachmentJson: string,
+  fileName: string,
+  mimeType: string,
+  boundary: string
+): string {
+  const parts: string[] = [];
+  for (const [key, value] of Object.entries(payload)) {
+    const safeKey = key.replace(/"/g, "'").replace(/[\r\n]/g, '');
+    parts.push(
+      `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="${safeKey}"\r\n\r\n` +
+        `${value}\r\n`
+    );
+  }
+  parts.push(
+    `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="attachment"; filename="${fileName}"\r\n` +
+      `Content-Type: ${mimeType}; charset=UTF-8\r\n\r\n` +
+      `${attachmentJson}\r\n`
+  );
+  parts.push(`--${boundary}--\r\n`);
+  return parts.join('');
+}
+
+async function sendViaCapacitorHttp(
+  endpoint: string,
+  payload: Record<string, string>,
+  attachmentJson: string,
+  jsonFileName: string
+): Promise<{ ok: boolean; needsActivation: boolean; message: string; status: number }> {
+  const baseHeaders = {
+    Accept: 'application/json',
+    Origin: 'https://gamragb.github.io',
+    Referer: 'https://gamragb.github.io/Carnet-de-Cr-dit/',
+    'User-Agent':
+      'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124.0.0.0 Mobile Safari/537.36',
+  };
+
+  // 1. Primary: native multipart/form-data with `.json` file attachment
+  const boundaryJson = `----CarnetCapJson${Date.now()}`;
+  const resJson = await CapacitorHttp.post({
+    url: endpoint,
+    headers: {
+      ...baseHeaders,
+      'Content-Type': `multipart/form-data; boundary=${boundaryJson}`,
+    },
+    data: buildRawMultipartBody(
+      payload,
+      attachmentJson,
+      jsonFileName,
+      'application/json',
+      boundaryJson
+    ),
+    connectTimeout: 20_000,
+    readTimeout: 30_000,
+  });
+  const parsedJson = parseFormSubmitResponse(resJson.status, resJson.data);
+  if (parsedJson.ok) return parsedJson;
+
+  // 2. Fallback: native multipart/form-data with `.txt` attachment
+  const boundaryTxt = `----CarnetCapTxt${Date.now()}`;
+  const txtFileName = jsonFileName.replace(/\.json$/i, '.txt');
+  const resTxt = await CapacitorHttp.post({
+    url: endpoint,
+    headers: {
+      ...baseHeaders,
+      'Content-Type': `multipart/form-data; boundary=${boundaryTxt}`,
+    },
+    data: buildRawMultipartBody(
+      payload,
+      attachmentJson,
+      txtFileName,
+      'text/plain',
+      boundaryTxt
+    ),
+    connectTimeout: 20_000,
+    readTimeout: 30_000,
+  });
+  const parsedTxt = parseFormSubmitResponse(resTxt.status, resTxt.data);
+  if (parsedTxt.ok) return parsedTxt;
+
+  // 3. Final native fallback: standard JSON body
+  const resBody = await CapacitorHttp.post({
+    url: endpoint,
+    headers: {
+      ...baseHeaders,
+      'Content-Type': 'application/json; charset=UTF-8',
+    },
+    data: payload,
+    connectTimeout: 20_000,
+    readTimeout: 30_000,
+  });
+  const parsedBody = parseFormSubmitResponse(resBody.status, resBody.data);
+  return parsedBody.ok || parsedBody.message ? parsedBody : parsedJson;
 }
 
 function buildFormSubmitMultipart(
@@ -348,26 +468,59 @@ export async function sendBackupToEmail(options: {
   const payloadJson = JSON.stringify(payload);
   const attachmentJson = buildEmailAttachmentJSONBackup(options.db);
   const jsonFileName = buildEmailBackupFileName();
-
-  // On native Android, route via Java HttpURLConnection so proper Origin/Referer headers
-  // and multipart .json file attachments are sent cleanly instead of WebView's https://localhost.
-  const nativePlugin = await getNativeEmailPlugin();
-  if (nativePlugin?.sendEmailNow) {
-    const nativeRes = await nativePlugin.sendEmailNow({
-      email: cleanEmail,
-      payloadJson,
-      attachmentJson,
-    });
-    return {
-      sentAt: nativeRes.sentAt || new Date().toISOString(),
-      email: nativeRes.email || cleanEmail,
-      needsActivation: Boolean(nativeRes.needsActivation),
-    };
-  }
-
   const endpoint = `https://formsubmit.co/ajax/${encodeURIComponent(cleanEmail)}`;
 
-  // 1. Primary: send multipart/form-data with real downloadable `.json` backup file attached
+  if (isNativeApp()) {
+    // Path 1: Custom Java plugin `GoogleDriveBackup.sendEmailNow` (present on APK v1.2.0+)
+    const nativePlugin = await getNativeEmailPlugin();
+    if (nativePlugin?.sendEmailNow) {
+      try {
+        const nativeRes = await nativePlugin.sendEmailNow({
+          email: cleanEmail,
+          payloadJson,
+          attachmentJson,
+        });
+        return {
+          sentAt: nativeRes.sentAt || new Date().toISOString(),
+          email: nativeRes.email || cleanEmail,
+          needsActivation: Boolean(nativeRes.needsActivation),
+        };
+      } catch (nativeErr) {
+        const errMsg = nativeErr instanceof Error ? nativeErr.message : String(nativeErr ?? '');
+        // Only abort immediately when clearly offline; otherwise fall back to CapacitorHttp
+        // (crucial when an older APK received an OTA update and lacks sendEmailNow in Java!)
+        if (/Unable to resolve host|UnknownHostException|No address associated/i.test(errMsg)) {
+          throw nativeErr;
+        }
+      }
+    }
+
+    // Path 2: Built-in CapacitorHttp native Android HTTP (present on ALL APKs v1.0.0+)
+    try {
+      const capResult = await sendViaCapacitorHttp(
+        endpoint,
+        payload,
+        attachmentJson,
+        jsonFileName
+      );
+      if (capResult.ok) {
+        return {
+          sentAt: new Date().toISOString(),
+          email: cleanEmail,
+          needsActivation: capResult.needsActivation,
+        };
+      }
+      throw new Error(capResult.message || `Email delivery error (${capResult.status})`);
+    } catch (capErr) {
+      const errMsg = capErr instanceof Error ? capErr.message : String(capErr ?? '');
+      if (/Unable to resolve host|UnknownHostException|No address associated/i.test(errMsg)) {
+        throw capErr;
+      }
+      // Last resort: try WebView fetch below before surfacing error
+    }
+  }
+
+  // Path 3: Web / PWA (or last-resort fallback) via FormData + Blob attachment
   let result = await postFormSubmitRequest(endpoint, {
     method: 'POST',
     headers: { Accept: 'application/json' },
@@ -379,7 +532,6 @@ export async function sendBackupToEmail(options: {
     ),
   });
 
-  // 2. Fallback if `.json` extension rejected: retry with `.txt` attachment containing identical JSON
   if (!result.ok) {
     const txtFileName = jsonFileName.replace(/\.json$/i, '.txt');
     const txtResult = await postFormSubmitRequest(endpoint, {
@@ -395,7 +547,6 @@ export async function sendBackupToEmail(options: {
     if (txtResult.ok) {
       result = txtResult;
     } else {
-      // 3. Final fallback: send standard JSON payload (inline copy-paste backup code still included)
       const jsonOnlyResult = await postFormSubmitRequest(endpoint, {
         method: 'POST',
         headers: {

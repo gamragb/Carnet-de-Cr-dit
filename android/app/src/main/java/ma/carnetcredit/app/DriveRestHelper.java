@@ -11,9 +11,12 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.net.ConnectException;
 import java.net.HttpURLConnection;
+import java.net.SocketTimeoutException;
 import java.net.URL;
 import java.net.URLEncoder;
+import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -270,6 +273,8 @@ public final class DriveRestHelper {
                 );
                 String boundary = extractMultipartBoundary(mpJson);
                 return postFormSubmit(urlStr, "multipart/form-data; boundary=" + boundary, mpJson, nowIso);
+            } catch (UnknownHostException | ConnectException | SocketTimeoutException netEx) {
+                throw netEx;
             } catch (Exception primaryEx) {
                 // 2. Fallback: retry attachment as `.txt` containing identical JSON backup
                 try {
@@ -282,6 +287,8 @@ public final class DriveRestHelper {
                     );
                     String boundary = extractMultipartBoundary(mpTxt);
                     return postFormSubmit(urlStr, "multipart/form-data; boundary=" + boundary, mpTxt, nowIso);
+                } catch (UnknownHostException | ConnectException | SocketTimeoutException netEx) {
+                    throw netEx;
                 } catch (Exception ignored) {
                     // Fall through to JSON body
                 }
@@ -351,6 +358,7 @@ public final class DriveRestHelper {
             conn = (HttpURLConnection) url.openConnection();
             conn.setConnectTimeout(20000);
             conn.setReadTimeout(30000);
+            conn.setInstanceFollowRedirects(true);
             conn.setRequestMethod("POST");
             conn.setRequestProperty("Content-Type", contentType);
             conn.setRequestProperty("Accept", "application/json");

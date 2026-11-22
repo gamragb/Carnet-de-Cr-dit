@@ -9,12 +9,12 @@
  *      npm run release:ota
  *    Then upload `release/update.json` and `release/bundle-<version>.zip` to your host.
  */
-export const APP_VERSION = '1.2.2';
+export const APP_VERSION = '1.2.3';
 
 /**
  * Native Android shell version (increment only when adding new native Capacitor plugins or Java code).
  */
-export const NATIVE_BINARY_VERSION = '1.2.2';
+export const NATIVE_BINARY_VERSION = '1.2.3';
 
 /**
  * Pre-configured HTTPS URL to your hosted update.json manifest.

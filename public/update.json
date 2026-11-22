@@ -1,10 +1,10 @@
 {
-  "version": "1.2.2",
+  "version": "1.2.3",
   "minNativeVersion": "1.0.0",
-  "bundleUrl": "https://gamragb.github.io/Carnet-de-Cr-dit/bundle-1.2.2.zip",
+  "bundleUrl": "https://gamragb.github.io/Carnet-de-Cr-dit/bundle-1.2.3.zip",
   "apkUrl": "",
   "playStoreUrl": "https://play.google.com/store/apps/details?id=ma.carnetcredit.app",
   "mandatory": false,
-  "notesFr": "v1.2.2 : Fichier de sauvegarde .json directement joint en pièce jointe dans chaque email (auto 10 h et bouton Sauvegarde JSON).",
-  "notesAr": "الإصدار 1.2.2: إرسال ملف النسخة الاحتياطية (.json) مرفقاً مباشرة داخل البريد الإلكتروني (تلقائياً كل 10 ساعات وعند الضغط على نسخة JSON)."
+  "notesFr": "v1.2.3 : Correction de l’envoi d’email sur téléphone Android (avec pièce jointe .json) et refonte complète de la page Paramètres en onglets compacts et professionnels.",
+  "notesAr": "الإصدار 1.2.3: إصلاح إرسال البريد الإلكتروني على هواتف أندرويد (مع ملف .json مرفق) وإعادة تصميم صفحة الإعدادات بشكل منظم ومختصر واحترافي."
 }
