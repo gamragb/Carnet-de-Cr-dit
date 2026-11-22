@@ -1,7 +1,7 @@
 {
   "name": "carnet-de-credit",
   "private": true,
-  "version": "1.2.0",
+  "version": "1.2.1",
   "type": "module",
   "description": "Application mobile-first PWA de gestion de crédits et dettes (MAD / DH)",
   "scripts": {

@@ -9,6 +9,7 @@
  *   (configured below or directly inside Settings -> Google Drive).
  */
 export const DRIVE_AUTO_BACKUP_INTERVAL_HOURS = 10;
+export const EMAIL_AUTO_BACKUP_INTERVAL_HOURS = 10;
 export const DRIVE_BACKUP_FOLDER_NAME = 'Carnet de Credit Backups';
 export const DRIVE_BACKUP_FILE_NAME = 'carnet-credit-auto-backup.json';
 export const DRIVE_FILE_SCOPE = 'https://www.googleapis.com/auth/drive.file';

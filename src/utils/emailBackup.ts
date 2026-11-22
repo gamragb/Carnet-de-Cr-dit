@@ -1,11 +1,12 @@
 import { Capacitor, registerPlugin } from '@capacitor/core';
+import { EMAIL_AUTO_BACKUP_INTERVAL_HOURS } from '../config/driveConfig.ts';
 import type { AppLanguage, LedgerDatabase } from '../types/ledger.ts';
-import { buildJSONBackup } from './exportImport.ts';
+import { buildJSONBackup, extractBackupJsonFromText } from './exportImport.ts';
 import { formatDateTimeFR, formatMAD, getTodayISODate } from './formatters.ts';
 import { computeAllLedgers } from './ledgerMath.ts';
 import { isNativeApp } from './nativePlatform.ts';
 
-export const EMAIL_AUTO_BACKUP_INTERVAL_HOURS = 10;
+export { EMAIL_AUTO_BACKUP_INTERVAL_HOURS, extractBackupJsonFromText };
 const MAX_EMAIL_JSON_BYTES = 180_000;
 
 interface NativeEmailBackupPlugin {
@@ -99,72 +100,6 @@ export function buildEmailSafeJSONBackup(db: LedgerDatabase): string {
     ),
   };
   return buildJSONBackup(lightDb);
-}
-
-/**
- * Extracts a JSON backup object even if the user copied extra email headers/text around it.
- */
-export function extractBackupJsonFromText(rawText: string): string {
-  const trimmed = rawText.trim();
-  if (!trimmed) return '';
-
-  // Fast path: already valid JSON object
-  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
-    try {
-      const parsed = JSON.parse(trimmed) as Record<string, unknown>;
-      if (parsed && typeof parsed === 'object') {
-        return trimmed;
-      }
-    } catch {
-      // Fall through to substring extraction
-    }
-  }
-
-  // Locate a JSON block containing "contacts" and "transactions"
-  const markerIdx = trimmed.indexOf('"contacts"');
-  if (markerIdx !== -1) {
-    let startIdx = trimmed.lastIndexOf('{', markerIdx);
-    while (startIdx !== -1) {
-      let depth = 0;
-      let inString = false;
-      let escaped = false;
-      for (let i = startIdx; i < trimmed.length; i += 1) {
-        const ch = trimmed[i];
-        if (inString) {
-          if (escaped) {
-            escaped = false;
-          } else if (ch === '\\') {
-            escaped = true;
-          } else if (ch === '"') {
-            inString = false;
-          }
-          continue;
-        }
-        if (ch === '"') {
-          inString = true;
-        } else if (ch === '{') {
-          depth += 1;
-        } else if (ch === '}') {
-          depth -= 1;
-          if (depth === 0) {
-            const candidate = trimmed.slice(startIdx, i + 1);
-            try {
-              const obj = JSON.parse(candidate) as Record<string, unknown>;
-              if (Array.isArray(obj.contacts) && Array.isArray(obj.transactions)) {
-                return candidate;
-              }
-            } catch {
-              // Keep searching outer brace
-            }
-            break;
-          }
-        }
-      }
-      startIdx = startIdx > 0 ? trimmed.lastIndexOf('{', startIdx - 1) : -1;
-    }
-  }
-
-  return trimmed;
 }
 
 export function buildEmailBackupPayload(

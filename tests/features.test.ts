@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import type { Contact, Transaction } from '../src/types/ledger.ts';
 import {
   formatMAD,
@@ -556,4 +558,69 @@ test('emailBackup: 10-hour email auto-backup scheduling, email validation, paylo
   assert.equal(normalized.settings.emailBackup?.enabled, true);
   assert.equal(normalized.settings.emailBackup?.email, 'amine@gmail.com');
   assert.equal(normalized.settings.emailBackup?.intervalHours, 10);
+});
+
+test('bundle safety: src/ contains zero value-import circular dependencies (prevents white-screen TDZ crashes)', () => {
+  const srcRoot = path.resolve(process.cwd(), 'src');
+  const graph = new Map<string, string[]>();
+
+  const walk = (dir: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(fullPath);
+      } else if (/\.(ts|tsx)$/.test(entry.name)) {
+        const content = fs.readFileSync(fullPath, 'utf8');
+        const deps: string[] = [];
+        const re = /(?:import|export)\s+(?!type\b)[\s\S]*?\sfrom\s+['"]([^'"]+)['"]/g;
+        for (const match of content.matchAll(re)) {
+          const specifier = match[1];
+          if (!specifier.startsWith('.')) continue;
+          let target = path.normalize(path.join(path.dirname(fullPath), specifier));
+          if (!fs.existsSync(target)) {
+            for (const ext of ['.ts', '.tsx']) {
+              if (fs.existsSync(target + ext)) {
+                target += ext;
+                break;
+              }
+            }
+          }
+          deps.push(target);
+        }
+        graph.set(path.normalize(fullPath), deps);
+      }
+    }
+  };
+
+  walk(srcRoot);
+
+  const visited = new Set<string>();
+  const stack = new Set<string>();
+  const cycles: string[] = [];
+
+  const dfs = (node: string, trail: string[]) => {
+    visited.add(node);
+    stack.add(node);
+    for (const next of graph.get(node) ?? []) {
+      if (stack.has(next)) {
+        const start = trail.indexOf(next);
+        cycles.push(
+          trail
+            .slice(start)
+            .concat(next)
+            .map((p) => path.relative(srcRoot, p))
+            .join(' -> ')
+        );
+      } else if (!visited.has(next)) {
+        dfs(next, trail.concat(next));
+      }
+    }
+    stack.delete(node);
+  };
+
+  for (const node of graph.keys()) {
+    if (!visited.has(node)) dfs(node, [node]);
+  }
+
+  assert.deepEqual(cycles, [], `Circular value imports detected:\n${cycles.join('\n')}`);
 });

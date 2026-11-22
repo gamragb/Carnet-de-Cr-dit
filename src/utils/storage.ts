@@ -1,6 +1,7 @@
 import {
   DEFAULT_GOOGLE_WEB_CLIENT_ID,
   DRIVE_AUTO_BACKUP_INTERVAL_HOURS,
+  EMAIL_AUTO_BACKUP_INTERVAL_HOURS,
 } from '../config/driveConfig.ts';
 import { DEFAULT_UPDATE_MANIFEST_URL } from '../config/updateConfig.ts';
 import type {
@@ -17,7 +18,6 @@ import type {
   TransactionType,
   UserAccountProfile,
 } from '../types/ledger.ts';
-import { EMAIL_AUTO_BACKUP_INTERVAL_HOURS } from './emailBackup.ts';
 import { roundMoney } from './formatters.ts';
 
 const LS_KEY = 'carnet_credit_maroc_v1';
