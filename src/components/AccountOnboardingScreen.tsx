@@ -1,9 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  AlertTriangle,
+  ArrowLeft,
   BookOpenCheck,
   Cloud,
+  HelpCircle,
   KeyRound,
   Lock,
+  LogIn,
   Phone,
   ShieldCheck,
   Store,
@@ -30,6 +34,7 @@ import {
   canUseStrongEncryption,
   decryptBackupJSON,
   isEncryptedBackupText,
+  verifyPin,
 } from '../utils/security.ts';
 
 export interface AccountRegistrationPayload {
@@ -42,10 +47,23 @@ export interface AccountRegistrationPayload {
   recovery: { question: string; answer: string } | null;
 }
 
+export interface ExistingAccountSummary {
+  fullName: string;
+  businessName: string;
+  phone: string;
+  pinEnabled: boolean;
+  pinHash: string | null;
+  contactsCount: number;
+  transactionsCount: number;
+}
+
 interface AccountOnboardingScreenProps {
   lang: AppLanguage;
   webDriveClientId?: string;
+  existingAccount?: ExistingAccountSummary | null;
   onChangeLanguage: (lang: AppLanguage) => void;
+  onSignIn?: () => void;
+  onOpenPinRecovery?: () => void;
   onRegister: (payload: AccountRegistrationPayload) => Promise<void>;
   onRestoreBackup: (
     payload: ParsedBackupResult,
@@ -56,7 +74,10 @@ interface AccountOnboardingScreenProps {
 export function AccountOnboardingScreen({
   lang,
   webDriveClientId,
+  existingAccount,
   onChangeLanguage,
+  onSignIn,
+  onOpenPinRecovery,
   onRegister,
   onRestoreBackup,
 }: AccountOnboardingScreenProps) {
@@ -64,6 +85,17 @@ export function AccountOnboardingScreen({
   const ob = t.onboarding;
   const s = t.settingsView;
   const pinText = t.pin;
+
+  const hasSavedAccount = Boolean(existingAccount);
+  const [mode, setMode] = useState<'signin' | 'register'>(
+    hasSavedAccount ? 'signin' : 'register'
+  );
+  const [signInPin, setSignInPin] = useState('');
+  const [signInBusy, setSignInBusy] = useState(false);
+  const [signInFailures, setSignInFailures] = useState(0);
+  const [lockoutUntil, setLockoutUntil] = useState(0);
+  const [lockoutSec, setLockoutSec] = useState(0);
+  const [confirmReplaceExisting, setConfirmReplaceExisting] = useState(false);
 
   const [fullName, setFullName] = useState('');
   const [usageType, setUsageType] = useState<AccountUsageType>('business');
@@ -76,6 +108,63 @@ export function AccountOnboardingScreen({
   const [recoveryAnswer, setRecoveryAnswer] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    setMode(existingAccount ? 'signin' : 'register');
+    setSignInPin('');
+    setConfirmReplaceExisting(false);
+    setError('');
+  }, [existingAccount]);
+
+  useEffect(() => {
+    if (lockoutUntil <= Date.now()) {
+      setLockoutSec(0);
+      return;
+    }
+    const tick = () => {
+      const rem = Math.max(0, Math.ceil((lockoutUntil - Date.now()) / 1000));
+      setLockoutSec(rem);
+    };
+    tick();
+    const id = window.setInterval(tick, 500);
+    return () => window.clearInterval(id);
+  }, [lockoutUntil]);
+
+  const handleSignInSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!existingAccount || !onSignIn || signInBusy || lockoutSec > 0) return;
+    setError('');
+
+    if (existingAccount.pinEnabled && existingAccount.pinHash) {
+      if (!/^\d{4}$/.test(signInPin)) {
+        setError(pinText.wrongPin);
+        return;
+      }
+      setSignInBusy(true);
+      try {
+        const ok = await verifyPin(signInPin, existingAccount.pinHash);
+        if (!ok) {
+          const nextFail = signInFailures + 1;
+          if (nextFail >= 5) {
+            setSignInFailures(0);
+            setLockoutUntil(Date.now() + 30_000);
+          } else {
+            setSignInFailures(nextFail);
+          }
+          setSignInPin('');
+          setError(pinText.wrongPin);
+          return;
+        }
+        setSignInFailures(0);
+        onSignIn();
+      } finally {
+        setSignInBusy(false);
+      }
+      return;
+    }
+
+    onSignIn();
+  };
 
   // Encrypted backup restore state
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -120,6 +209,11 @@ export function AccountOnboardingScreen({
     e.preventDefault();
     if (submitting) return;
     setError('');
+
+    if (hasSavedAccount && !confirmReplaceExisting) {
+      setError(ob.replaceAccountWarning);
+      return;
+    }
 
     const cleanName = fullName.trim();
     if (cleanName.length < 2) {
@@ -274,26 +368,180 @@ export function AccountOnboardingScreen({
           </div>
         </div>
 
-        {/* Main Registration Card */}
+        {/* Main Sign-In OR Registration Card */}
         <section className="rounded-3xl border border-slate-200/90 bg-white p-5 shadow-xl shadow-slate-900/5 dark:border-slate-800 dark:bg-slate-900">
-          <div className="flex items-start gap-3">
-            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-teal-50 text-teal-700 ring-1 ring-teal-200/80 dark:bg-teal-950/60 dark:text-teal-300 dark:ring-teal-800/60">
-              <UserPlus className="h-6 w-6" />
-            </div>
-            <div>
-              <span className="inline-block rounded-full bg-teal-50 px-2.5 py-0.5 text-[11px] font-extrabold text-teal-800 dark:bg-teal-950/70 dark:text-teal-300">
-                {ob.badge}
-              </span>
-              <h1 className="mt-1 text-xl font-extrabold tracking-tight text-slate-900 dark:text-white">
-                {ob.title}
-              </h1>
-              <p className="mt-1 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
-                {ob.subtitle}
-              </p>
-            </div>
-          </div>
+          {mode === 'signin' && existingAccount ? (
+            <>
+              <div className="flex items-start gap-3">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-teal-700 text-base font-extrabold text-white shadow-md shadow-teal-700/20">
+                  {(existingAccount.fullName || existingAccount.businessName || 'C')
+                    .trim()
+                    .slice(0, 2)
+                    .toUpperCase()}
+                </div>
+                <div className="min-w-0">
+                  <span className="inline-block rounded-full bg-teal-50 px-2.5 py-0.5 text-[11px] font-extrabold text-teal-800 dark:bg-teal-950/70 dark:text-teal-300">
+                    {ob.signInBadge}
+                  </span>
+                  <h1 className="mt-1 text-xl font-extrabold tracking-tight text-slate-900 dark:text-white">
+                    {ob.signInTitle}
+                  </h1>
+                  <p className="mt-1 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+                    {ob.signInSubtitle}
+                  </p>
+                </div>
+              </div>
 
-          <form onSubmit={handleSubmit} className="mt-5 space-y-4">
+              <div className="mt-4 rounded-2xl border border-slate-200/80 bg-slate-50/80 p-3.5 dark:border-slate-800 dark:bg-slate-800/50">
+                <p className="truncate text-sm font-extrabold text-slate-900 dark:text-white">
+                  {existingAccount.fullName || existingAccount.businessName || t.appName}
+                </p>
+                {existingAccount.businessName &&
+                  existingAccount.businessName !== existingAccount.fullName && (
+                    <p className="mt-0.5 truncate text-xs font-semibold text-teal-700 dark:text-teal-400">
+                      {existingAccount.businessName}
+                    </p>
+                  )}
+                {existingAccount.phone && (
+                  <p dir="ltr" className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                    {existingAccount.phone}
+                  </p>
+                )}
+                <p className="mt-2 text-[11px] font-bold text-slate-500 dark:text-slate-400">
+                  {ob.savedSummary(
+                    existingAccount.contactsCount,
+                    existingAccount.transactionsCount
+                  )}
+                </p>
+              </div>
+
+              <form onSubmit={handleSignInSubmit} className="mt-4 space-y-4">
+                {(error || lockoutSec > 0) && (
+                  <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs font-semibold text-rose-700 dark:border-rose-900 dark:bg-rose-950/60 dark:text-rose-300">
+                    {lockoutSec > 0 ? pinText.lockoutWait(lockoutSec) : error}
+                  </div>
+                )}
+
+                {existingAccount.pinEnabled && existingAccount.pinHash ? (
+                  <div>
+                    <label
+                      htmlFor="signin-pin"
+                      className="flex items-center gap-1.5 text-xs font-bold text-slate-700 dark:text-slate-300"
+                    >
+                      <Lock className="h-3.5 w-3.5 text-teal-700 dark:text-teal-400" />
+                      {ob.signInPinLabel}
+                    </label>
+                    <input
+                      id="signin-pin"
+                      type="password"
+                      inputMode="numeric"
+                      dir="ltr"
+                      maxLength={4}
+                      autoFocus
+                      disabled={lockoutSec > 0}
+                      value={signInPin}
+                      onChange={(e) => {
+                        setSignInPin(e.target.value.replace(/\D/g, '').slice(0, 4));
+                        if (error) setError('');
+                      }}
+                      placeholder="••••"
+                      className="mt-1.5 min-h-[48px] w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-center text-xl font-bold tracking-[0.6em] outline-none focus:border-teal-600 focus:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                    />
+                    {onOpenPinRecovery && (
+                      <button
+                        type="button"
+                        onClick={onOpenPinRecovery}
+                        className="mt-2 inline-flex items-center gap-1 text-xs font-bold text-teal-700 hover:underline dark:text-teal-400"
+                      >
+                        <HelpCircle className="h-3.5 w-3.5" />
+                        <span>{ob.signInForgotPinBtn}</span>
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    {ob.signInNoPinHint}
+                  </p>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={signInBusy || lockoutSec > 0}
+                  className="flex min-h-[50px] w-full items-center justify-center gap-2 rounded-2xl bg-teal-700 px-4 text-sm font-extrabold text-white shadow-md shadow-teal-700/20 transition hover:bg-teal-800 active:scale-[0.99] disabled:opacity-60"
+                >
+                  <LogIn className="h-4 w-4" />
+                  <span>{signInBusy ? ob.signingInBtn : ob.signInBtn}</span>
+                </button>
+              </form>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setError('');
+                  setConfirmReplaceExisting(false);
+                  setMode('register');
+                }}
+                className="mt-3 flex min-h-[44px] w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 text-xs font-bold text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+              >
+                <UserPlus className="h-4 w-4 text-teal-700 dark:text-teal-400" />
+                <span>{ob.switchToRegisterBtn}</span>
+              </button>
+            </>
+          ) : (
+            <>
+              {hasSavedAccount && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setError('');
+                    setMode('signin');
+                  }}
+                  className="mb-3 inline-flex items-center gap-1.5 rounded-xl bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-700 transition hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-200"
+                >
+                  <ArrowLeft className="h-3.5 w-3.5 rtl:rotate-180" />
+                  <span>{ob.backToSignInBtn}</span>
+                </button>
+              )}
+
+              <div className="flex items-start gap-3">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-teal-50 text-teal-700 ring-1 ring-teal-200/80 dark:bg-teal-950/60 dark:text-teal-300 dark:ring-teal-800/60">
+                  <UserPlus className="h-6 w-6" />
+                </div>
+                <div>
+                  <span className="inline-block rounded-full bg-teal-50 px-2.5 py-0.5 text-[11px] font-extrabold text-teal-800 dark:bg-teal-950/70 dark:text-teal-300">
+                    {ob.badge}
+                  </span>
+                  <h1 className="mt-1 text-xl font-extrabold tracking-tight text-slate-900 dark:text-white">
+                    {ob.title}
+                  </h1>
+                  <p className="mt-1 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+                    {ob.subtitle}
+                  </p>
+                </div>
+              </div>
+
+              {hasSavedAccount && (
+                <div className="mt-4 space-y-2 rounded-2xl border border-amber-200 bg-amber-50/90 p-3 text-xs text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200">
+                  <div className="flex items-start gap-2 font-semibold">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>{ob.replaceAccountWarning}</span>
+                  </div>
+                  <label className="flex cursor-pointer items-center gap-2 pt-1 font-bold">
+                    <input
+                      type="checkbox"
+                      checked={confirmReplaceExisting}
+                      onChange={(e) => {
+                        setConfirmReplaceExisting(e.target.checked);
+                        if (error) setError('');
+                      }}
+                      className="h-4 w-4 rounded accent-teal-700"
+                    />
+                    <span>{ob.confirmReplaceCheckbox}</span>
+                  </label>
+                </div>
+              )}
+
+              <form onSubmit={handleSubmit} className="mt-5 space-y-4">
             {error && (
               <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs font-semibold text-rose-700 dark:border-rose-900 dark:bg-rose-950/60 dark:text-rose-300">
                 {error}
@@ -512,16 +760,18 @@ export function AccountOnboardingScreen({
               )}
             </div>
 
-            {/* Submit Button */}
-            <button
-              type="submit"
-              disabled={submitting}
-              className="flex min-h-[50px] w-full items-center justify-center gap-2 rounded-2xl bg-teal-700 px-4 text-sm font-extrabold text-white shadow-md shadow-teal-700/20 transition hover:bg-teal-800 active:scale-[0.99] disabled:opacity-60"
-            >
-              <UserPlus className="h-4 w-4" />
-              <span>{submitting ? ob.submittingBtn : ob.submitBtn}</span>
-            </button>
-          </form>
+              {/* Submit Button */}
+              <button
+                type="submit"
+                disabled={submitting}
+                className="flex min-h-[50px] w-full items-center justify-center gap-2 rounded-2xl bg-teal-700 px-4 text-sm font-extrabold text-white shadow-md shadow-teal-700/20 transition hover:bg-teal-800 active:scale-[0.99] disabled:opacity-60"
+              >
+                <UserPlus className="h-4 w-4" />
+                <span>{submitting ? ob.submittingBtn : ob.submitBtn}</span>
+              </button>
+            </form>
+          </>
+          )}
 
           {/* Divider + Restore Existing Backup */}
           <div className="my-4 flex items-center gap-3">

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'carnet-credit-v8';
+const CACHE_NAME = 'carnet-credit-v9';
 const APP_SHELL = [
   './',
   './index.html',

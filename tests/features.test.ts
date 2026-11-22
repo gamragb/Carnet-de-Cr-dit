@@ -259,13 +259,39 @@ test('onboarding: fresh database starts completely empty with accountRegistered=
   assert.equal(initial.contacts.length, 0);
   assert.equal(initial.transactions.length, 0);
   assert.equal(initial.settings.accountRegistered, false);
+  assert.equal(initial.settings.accountSignedOut, false);
   assert.equal(initial.settings.account, undefined);
 
-  // Explicit unregistered DB remains unregistered on reload
-  const reloadedFresh = normalizeLoadedDb(JSON.parse(JSON.stringify(initial)));
+  // Explicit unregistered DB remains unregistered on reload (cannot be signedOut if unregistered)
+  const reloadedFresh = normalizeLoadedDb({
+    ...JSON.parse(JSON.stringify(initial)),
+    settings: { ...initial.settings, accountSignedOut: true },
+  });
   assert.ok(reloadedFresh);
   assert.equal(reloadedFresh.contacts.length, 0);
   assert.equal(reloadedFresh.settings.accountRegistered, false);
+  assert.equal(reloadedFresh.settings.accountSignedOut, false);
+
+  // Registered user who signed out keeps accountSignedOut=true and data intact across reloads
+  const signedOutDb = normalizeLoadedDb({
+    version: 1,
+    contacts: [makeContact({ id: 'c-keep', name: 'Salim' })],
+    transactions: [],
+    settings: {
+      accountRegistered: true,
+      accountSignedOut: true,
+      account: {
+        fullName: 'Mohamed Amine',
+        phone: '06 61 48 23 90',
+        usageType: 'business',
+        createdAt: '2026-11-22T17:00:00.000Z',
+      },
+    },
+  });
+  assert.ok(signedOutDb);
+  assert.equal(signedOutDb.settings.accountRegistered, true);
+  assert.equal(signedOutDb.settings.accountSignedOut, true);
+  assert.equal(signedOutDb.contacts.length, 1);
 
   // Legacy DB with existing data migrates cleanly as registered
   const legacy = normalizeLoadedDb({

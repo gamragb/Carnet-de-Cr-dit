@@ -71,6 +71,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   notificationsEnabled: false,
   updateManifestUrl: DEFAULT_UPDATE_MANIFEST_URL,
   accountRegistered: false,
+  accountSignedOut: false,
   driveBackup: { ...DEFAULT_DRIVE_BACKUP },
 };
 
@@ -420,6 +421,7 @@ export function normalizeLoadedDb(raw: unknown): LedgerDatabase | null {
         ? rawSettings.lastUpdateCheckAt
         : undefined,
     accountRegistered: inferredRegistered,
+    accountSignedOut: Boolean(inferredRegistered && rawSettings.accountSignedOut),
     account,
     driveBackup,
   };

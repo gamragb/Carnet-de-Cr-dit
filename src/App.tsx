@@ -5,6 +5,7 @@ import {
   Eye,
   EyeOff,
   Lock,
+  LogOut,
   Moon,
   RefreshCw,
   Sun,
@@ -139,6 +140,8 @@ function LedgerApp() {
 
   const [deleteContactTarget, setDeleteContactTarget] = useState<Contact | null>(null);
   const [deleteTxTarget, setDeleteTxTarget] = useState<Transaction | null>(null);
+  const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
+  const [forcePinRecoveryScreen, setForcePinRecoveryScreen] = useState(false);
 
   const lastActivityRef = useRef<number>(Date.now());
   const hiddenAtRef = useRef<number | null>(null);
@@ -238,7 +241,9 @@ function LedgerApp() {
   // Android hardware back button handling inside Capacitor shell
   const backHandlerRef = useRef<() => void>(() => {});
   backHandlerRef.current = () => {
-    if (deleteTxTarget) {
+    if (logoutConfirmOpen) {
+      setLogoutConfirmOpen(false);
+    } else if (deleteTxTarget) {
       setDeleteTxTarget(null);
     } else if (deleteContactTarget) {
       setDeleteContactTarget(null);
@@ -756,8 +761,10 @@ function LedgerApp() {
         pinHash: null,
         pinRecoveryQuestion: '',
         pinRecoveryHash: null,
+        accountSignedOut: false,
       },
     }));
+    setForcePinRecoveryScreen(false);
     setIsUnlocked(true);
     showToast(t.toasts.pinResetByRecovery, 'info');
   };
@@ -775,6 +782,7 @@ function LedgerApp() {
       },
     };
     updateDb(resetDb);
+    setForcePinRecoveryScreen(false);
     setSelectedContactId(null);
     setActiveTab('dashboard');
     setIsUnlocked(true);
@@ -793,6 +801,10 @@ function LedgerApp() {
       }
     }
 
+    if (db.settings.accountRegistered) {
+      void disconnectGoogleDrive();
+    }
+
     updateDb((prev) => ({
       ...prev,
       initialized: true,
@@ -803,6 +815,7 @@ function LedgerApp() {
         language: payload.language,
         businessName: payload.businessName,
         accountRegistered: true,
+        accountSignedOut: false,
         account: {
           fullName: payload.fullName,
           phone: payload.phone,
@@ -813,14 +826,54 @@ function LedgerApp() {
         pinHash,
         pinRecoveryQuestion: payload.recovery?.question ?? '',
         pinRecoveryHash: recoveryHash,
+        driveBackup: {
+          enabled: false,
+          connected: false,
+          email: '',
+          intervalHours: DRIVE_AUTO_BACKUP_INTERVAL_HOURS,
+          webClientId: prev.settings.driveBackup?.webClientId ?? DEFAULT_GOOGLE_WEB_CLIENT_ID,
+        },
       },
     }));
 
     lastActivityRef.current = Date.now();
+    setForcePinRecoveryScreen(false);
     setSelectedContactId(null);
     setActiveTab('dashboard');
     setIsUnlocked(true);
     showToast(UI_TEXT[payload.language].toasts.accountCreated(payload.fullName));
+  };
+
+  const handleConfirmLogout = () => {
+    setLogoutConfirmOpen(false);
+    setSelectedContactId(null);
+    setActiveTab('dashboard');
+    setForcePinRecoveryScreen(false);
+    setIsUnlocked(false);
+    updateDb((prev) => ({
+      ...prev,
+      settings: {
+        ...prev.settings,
+        accountSignedOut: true,
+      },
+    }));
+    showToast(t.toasts.signedOut, 'info');
+  };
+
+  const handleSignIn = () => {
+    const label =
+      db.settings.account?.fullName?.trim() || db.settings.businessName.trim() || '';
+    updateDb((prev) => ({
+      ...prev,
+      settings: {
+        ...prev.settings,
+        accountSignedOut: false,
+      },
+    }));
+    lastActivityRef.current = Date.now();
+    setForcePinRecoveryScreen(false);
+    setIsUnlocked(true);
+    showToast(t.toasts.signedIn(label));
   };
 
   const handleRestoreFromOnboarding = (
@@ -837,6 +890,7 @@ function LedgerApp() {
       settings: {
         ...prev.settings,
         accountRegistered: true,
+        accountSignedOut: false,
         account:
           payload.account ??
           (payload.businessName
@@ -923,6 +977,7 @@ function LedgerApp() {
       },
     };
     updateDb(resetDb);
+    setForcePinRecoveryScreen(false);
     setSelectedContactId(null);
     setActiveTab('dashboard');
     setIsUnlocked(true);
@@ -975,6 +1030,7 @@ function LedgerApp() {
       settings: {
         ...prev.settings,
         accountRegistered: true,
+        accountSignedOut: false,
         account: payload.account ?? prev.settings.account,
         businessName: payload.businessName ?? prev.settings.businessName,
         language: payload.language ?? prev.settings.language,
@@ -1545,19 +1601,42 @@ function LedgerApp() {
     );
   }
 
-  if (!db.settings.accountRegistered) {
+  if ((!db.settings.accountRegistered || db.settings.accountSignedOut) && !forcePinRecoveryScreen) {
     return (
       <AccountOnboardingScreen
         lang={lang}
         webDriveClientId={db.settings.driveBackup?.webClientId}
+        existingAccount={
+          db.settings.accountRegistered
+            ? {
+                fullName: db.settings.account?.fullName ?? '',
+                businessName: db.settings.businessName,
+                phone: db.settings.account?.phone ?? '',
+                pinEnabled: Boolean(db.settings.pinEnabled && db.settings.pinHash),
+                pinHash: db.settings.pinHash,
+                contactsCount: db.contacts.length,
+                transactionsCount: db.transactions.length,
+              }
+            : null
+        }
         onChangeLanguage={handleChangeLanguage}
+        onSignIn={handleSignIn}
+        onOpenPinRecovery={
+          db.settings.pinEnabled && db.settings.pinHash
+            ? () => setForcePinRecoveryScreen(true)
+            : undefined
+        }
         onRegister={handleRegisterAccount}
         onRestoreBackup={handleRestoreFromOnboarding}
       />
     );
   }
 
-  if (!isUnlocked && db.settings.pinEnabled && db.settings.pinHash) {
+  if (
+    (forcePinRecoveryScreen || !isUnlocked) &&
+    db.settings.pinEnabled &&
+    db.settings.pinHash
+  ) {
     return (
       <PinLockScreen
         pinHash={db.settings.pinHash}
@@ -1566,8 +1645,13 @@ function LedgerApp() {
         accountLabel={accountDisplayLabel || undefined}
         lang={lang}
         onUnlock={() => {
-          lastActivityRef.current = Date.now();
-          setIsUnlocked(true);
+          if (db.settings.accountSignedOut) {
+            handleSignIn();
+          } else {
+            lastActivityRef.current = Date.now();
+            setForcePinRecoveryScreen(false);
+            setIsUnlocked(true);
+          }
         }}
         onRecoveredResetPin={handleRecoveredResetPin}
         onEmergencyResetData={handleEmergencyResetData}
@@ -1655,6 +1739,16 @@ function LedgerApp() {
                 <Lock className="h-4 w-4" />
               </button>
             )}
+
+            <button
+              type="button"
+              onClick={() => setLogoutConfirmOpen(true)}
+              aria-label={t.logoutAppLabel}
+              title={t.logoutAppLabel}
+              className="flex h-9 w-9 items-center justify-center rounded-xl bg-rose-50 text-rose-700 transition hover:bg-rose-100 dark:bg-rose-950/60 dark:text-rose-300 dark:hover:bg-rose-900/60"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
           </div>
         </div>
       </header>
@@ -1884,6 +1978,7 @@ function LedgerApp() {
             onRestoreBackup={handleRestoreBackup}
             onImportCsv={handleImportCsv}
             onClearAllData={handleClearAllData}
+            onRequestLogout={() => setLogoutConfirmOpen(true)}
             onResetAccount={handleResetAccount}
           />
         )}
@@ -1944,6 +2039,18 @@ function LedgerApp() {
         totals={totals}
         businessName={db.settings.businessName}
         onClose={() => setGlobalReportOpen(false)}
+      />
+
+      {/* Logout Confirmation */}
+      <ConfirmDialog
+        open={logoutConfirmOpen}
+        lang={lang}
+        title={t.settingsView.confirmLogoutTitle}
+        description={t.settingsView.confirmLogoutDesc}
+        confirmLabel={t.settingsView.confirmLogoutBtn}
+        danger
+        onConfirm={handleConfirmLogout}
+        onCancel={() => setLogoutConfirmOpen(false)}
       />
 
       {/* Delete Contact Confirmation */}

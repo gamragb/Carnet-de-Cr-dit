@@ -113,6 +113,7 @@ interface SettingsViewProps {
     skippedRows: number;
   }) => void;
   onClearAllData: () => void;
+  onRequestLogout: () => void;
   onResetAccount: () => void;
 }
 
@@ -149,6 +150,7 @@ export function SettingsView({
   onRestoreBackup,
   onImportCsv,
   onClearAllData,
+  onRequestLogout,
   onResetAccount,
 }: SettingsViewProps) {
   const { showToast } = useToast();
@@ -538,12 +540,22 @@ export function SettingsView({
             />
           </div>
 
-          <button
-            type="submit"
-            className="min-h-[44px] w-full rounded-2xl bg-slate-900 px-4 text-xs font-bold text-white transition hover:bg-slate-800 dark:bg-teal-700 dark:hover:bg-teal-600"
-          >
-            {s.accountSaveBtn}
-          </button>
+          <div className="grid grid-cols-1 gap-2 pt-1 sm:grid-cols-2">
+            <button
+              type="submit"
+              className="min-h-[44px] w-full rounded-2xl bg-slate-900 px-4 text-xs font-bold text-white transition hover:bg-slate-800 dark:bg-teal-700 dark:hover:bg-teal-600"
+            >
+              {s.accountSaveBtn}
+            </button>
+            <button
+              type="button"
+              onClick={onRequestLogout}
+              className="flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-2xl border border-rose-200 bg-rose-50 px-4 text-xs font-bold text-rose-700 transition hover:bg-rose-100 dark:border-rose-900/60 dark:bg-rose-950/50 dark:text-rose-300"
+            >
+              <LogOut className="h-4 w-4 shrink-0" />
+              <span>{s.logoutBtn}</span>
+            </button>
+          </div>
         </form>
       </section>
 

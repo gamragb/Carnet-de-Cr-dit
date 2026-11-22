@@ -105,6 +105,7 @@ export const UI_TEXT = {
     hideAmountsLabel: 'Masquer les montants',
     showAmountsLabel: 'Afficher les montants',
     lockAppLabel: "Verrouiller l'application",
+    logoutAppLabel: 'Se déconnecter',
     undoBtn: 'Annuler',
     updateAvailableBanner: 'Une nouvelle version de l’application est prête.',
     updateReloadBtn: 'Mettre à jour',
@@ -492,6 +493,11 @@ export const UI_TEXT = {
       accountUsagePersonal: 'Personnel',
       accountSinceLabel: (date: string) => `Compte créé le ${date}`,
       accountSaveBtn: 'Enregistrer le profil',
+      logoutBtn: 'Se déconnecter',
+      confirmLogoutTitle: 'Se déconnecter de votre compte ?',
+      confirmLogoutDesc:
+        'Vos contacts et opérations restent enregistrés en toute sécurité sur cet appareil. Vous pourrez vous reconnecter à tout moment.',
+      confirmLogoutBtn: 'Se déconnecter',
       resetAccountBtn: 'Réinitialiser le compte',
       confirmResetAccountTitle: 'Réinitialiser complètement le compte ?',
       confirmResetAccountDesc:
@@ -561,6 +567,21 @@ export const UI_TEXT = {
       restoreBtn: 'Déjà un compte ? Restaurer une sauvegarde (.json)',
       restoreDriveBtn: 'Restaurer depuis Google Drive',
       restoringDriveBtn: 'Connexion à Google Drive...',
+      signInBadge: 'Compte enregistré',
+      signInTitle: 'Connexion à votre compte',
+      signInSubtitle: 'Reconnectez-vous pour retrouver votre carnet enregistré sur cet appareil.',
+      signInPinLabel: 'Entrez votre code PIN (4 chiffres) *',
+      signInPinHint: 'Votre compte est protégé par un code PIN.',
+      signInNoPinHint: 'Vos données locales sont prêtes — reconnectez-vous en un clic.',
+      signInBtn: 'Se connecter',
+      signingInBtn: 'Connexion...',
+      signInForgotPinBtn: 'Code PIN oublié ?',
+      switchToRegisterBtn: 'Créer un nouveau compte',
+      backToSignInBtn: 'Retour à la connexion',
+      replaceAccountWarning:
+        'Attention : créer un nouveau compte remplacera le compte et les données locales actuels sur cet appareil.',
+      confirmReplaceCheckbox: 'Je confirme vouloir créer un nouveau compte vide',
+      savedSummary: (c: number, t: number) => `${c} personne(s) • ${t} opération(s)`,
       privacyNote:
         '100% privé & hors ligne : vos données restent uniquement sur votre téléphone.',
     },
@@ -680,6 +701,9 @@ export const UI_TEXT = {
       accountCreated: (name: string) => `Bienvenue ${name} ! Votre compte est prêt.`,
       accountUpdated: 'Profil du compte mis à jour.',
       accountReset: 'Compte réinitialisé. Créez un nouveau compte.',
+      signedOut: 'Vous êtes déconnecté. Vos données restent enregistrées.',
+      signedIn: (name: string) =>
+        name ? `Bon retour, ${name} !` : 'Connexion réussie !',
     },
   },
   ar: {
@@ -690,6 +714,7 @@ export const UI_TEXT = {
     hideAmountsLabel: 'إخفاء المبالغ',
     showAmountsLabel: 'إظهار المبالغ',
     lockAppLabel: 'قفل التطبيق',
+    logoutAppLabel: 'تسجيل الخروج',
     undoBtn: 'تراجع',
     updateAvailableBanner: 'تتوفر نسخة جديدة محدثة من التطبيق.',
     updateReloadBtn: 'تحديث الآن',
@@ -1066,6 +1091,11 @@ export const UI_TEXT = {
       accountUsagePersonal: 'شخصي',
       accountSinceLabel: (date: string) => `تاريخ إنشاء الحساب: ${date}`,
       accountSaveBtn: 'حفظ معلومات الحساب',
+      logoutBtn: 'تسجيل الخروج',
+      confirmLogoutTitle: 'هل تريد تسجيل الخروج؟',
+      confirmLogoutDesc:
+        'ستبقى جميع بياناتك وحساباتك محفوظة بأمان على جهازك، ويمكنك تسجيل الدخول مرة أخرى في أي وقت.',
+      confirmLogoutBtn: 'نعم، تسجيل الخروج',
       resetAccountBtn: 'تصفير الحساب',
       confirmResetAccountTitle: 'تصفير الحساب بالكامل؟',
       confirmResetAccountDesc:
@@ -1135,6 +1165,21 @@ export const UI_TEXT = {
       restoreBtn: 'لديك حساب سابق؟ استرجاع نسخة احتياطية (.json)',
       restoreDriveBtn: 'استرجاع النسخة من Google Drive',
       restoringDriveBtn: 'جاري الاتصال بـ Google Drive...',
+      signInBadge: 'حساب مسجّل',
+      signInTitle: 'تسجيل الدخول',
+      signInSubtitle: 'سجّل الدخول للعودة إلى دفتر الكريدي المحفوظ على جهازك.',
+      signInPinLabel: 'أدخل الرمز السري PIN (4 أرقام) *',
+      signInPinHint: 'هذا الحساب محمي برمز سري PIN.',
+      signInNoPinHint: 'بياناتك محفوظة بأمان — اضغط لتسجيل الدخول مباشرة.',
+      signInBtn: 'تسجيل الدخول',
+      signingInBtn: 'جاري الدخول...',
+      signInForgotPinBtn: 'نسيت رمز PIN؟',
+      switchToRegisterBtn: 'تسجيل حساب جديد',
+      backToSignInBtn: 'الرجوع لتسجيل الدخول',
+      replaceAccountWarning:
+        'تنبيه: إنشاء حساب جديد سيستبدل الحساب والبيانات المحلية الحالية على هذا الجهاز بدفتر فارغ جديد.',
+      confirmReplaceCheckbox: 'أؤكد رغبتي في إنشاء حساب جديد فارغ',
+      savedSummary: (c: number, t: number) => `${c} شخص • ${t} عملية مسجلة`,
       privacyNote: 'خصوصية تامة وبدون إنترنت: جميع بياناتك تبقى محفوظة في هاتفك فقط.',
     },
     pin: {
@@ -1251,6 +1296,9 @@ export const UI_TEXT = {
       accountCreated: (name: string) => `مرحباً بك ${name}! تم إنشاء حسابك بنجاح.`,
       accountUpdated: 'تم تحديث معلومات حسابك بنجاح.',
       accountReset: 'تم تصفير الحساب. يمكنك إنشاء حساب جديد الآن.',
+      signedOut: 'تم تسجيل الخروج بنجاح. بياناتك محفوظة بأمان.',
+      signedIn: (name: string) =>
+        name ? `مرحباً بعودتك، ${name}!` : 'تم تسجيل الدخول بنجاح!',
     },
   },
 } as const;

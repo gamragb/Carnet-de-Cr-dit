@@ -83,6 +83,7 @@ export interface AppSettings {
   updateManifestUrl?: string;
   lastUpdateCheckAt?: string;
   accountRegistered?: boolean;
+  accountSignedOut?: boolean;
   account?: UserAccountProfile;
   driveBackup?: DriveBackupSettings;
 }
