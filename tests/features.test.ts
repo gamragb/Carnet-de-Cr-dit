@@ -16,6 +16,7 @@ import {
 } from '../src/utils/ledgerMath.ts';
 import {
   buildDueCalendarICS,
+  buildJSONBackup,
   buildTransactionsCSV,
   mergeBackupDatabases,
   parseAndValidateBackupJSON,
@@ -29,7 +30,11 @@ import {
   sha256HexPure,
   verifyRecoveryAnswer,
 } from '../src/utils/security.ts';
-import { createSampleSeedData } from '../src/utils/storage.ts';
+import {
+  createInitialDatabase,
+  createSampleSeedData,
+  normalizeLoadedDb,
+} from '../src/utils/storage.ts';
 import {
   compareSemver,
   isValidUpdateUrl,
@@ -241,6 +246,53 @@ test('exportImport: semicolon Arabic CSV round-trip, ICS calendar, and localized
     () => parseAndValidateBackupJSON('{bad', 'ar'),
     /JSON صالح/
   );
+});
+
+test('onboarding: fresh database starts completely empty with accountRegistered=false and backup preserves account profile', () => {
+  const initial = createInitialDatabase('fr');
+  assert.equal(initial.contacts.length, 0);
+  assert.equal(initial.transactions.length, 0);
+  assert.equal(initial.settings.accountRegistered, false);
+  assert.equal(initial.settings.account, undefined);
+
+  // Explicit unregistered DB remains unregistered on reload
+  const reloadedFresh = normalizeLoadedDb(JSON.parse(JSON.stringify(initial)));
+  assert.ok(reloadedFresh);
+  assert.equal(reloadedFresh.contacts.length, 0);
+  assert.equal(reloadedFresh.settings.accountRegistered, false);
+
+  // Legacy DB with existing data migrates cleanly as registered
+  const legacy = normalizeLoadedDb({
+    version: 1,
+    contacts: [makeContact({ id: 'legacy-1', name: 'Mourad' })],
+    transactions: [],
+    settings: { language: 'ar', businessName: 'متجر السلام' },
+  });
+  assert.ok(legacy);
+  assert.equal(legacy.settings.accountRegistered, true);
+
+  // Registered account profile survives JSON backup round-trip
+  const registeredDb = {
+    ...initial,
+    settings: {
+      ...initial.settings,
+      language: 'ar' as const,
+      businessName: 'متجر البركة',
+      accountRegistered: true,
+      account: {
+        fullName: 'محمد أمين',
+        phone: '06 61 48 23 90',
+        usageType: 'business' as const,
+        createdAt: '2026-11-22T17:00:00.000Z',
+      },
+    },
+  };
+  const backupJson = buildJSONBackup(registeredDb);
+  const restored = parseAndValidateBackupJSON(backupJson, 'ar');
+  assert.equal(restored.businessName, 'متجر البركة');
+  assert.equal(restored.account?.fullName, 'محمد أمين');
+  assert.equal(restored.account?.phone, '06 61 48 23 90');
+  assert.equal(restored.account?.usageType, 'business');
 
   const arSeed = createSampleSeedData('ar');
   assert.equal(arSeed.contacts.length, 3);

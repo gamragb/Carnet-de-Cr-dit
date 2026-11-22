@@ -1,5 +1,13 @@
 export type AppLanguage = 'fr' | 'ar';
 export type AppTheme = 'light' | 'dark';
+export type AccountUsageType = 'business' | 'personal';
+
+export interface UserAccountProfile {
+  fullName: string;
+  phone: string;
+  usageType: AccountUsageType;
+  createdAt: string;
+}
 
 export type ContactCategory = 'Client' | 'Fournisseur' | 'Famille/Ami' | 'Autre';
 
@@ -62,6 +70,8 @@ export interface AppSettings {
   lastBackupAt?: string;
   updateManifestUrl?: string;
   lastUpdateCheckAt?: string;
+  accountRegistered?: boolean;
+  account?: UserAccountProfile;
 }
 
 export interface LedgerDatabase {

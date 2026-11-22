@@ -4,6 +4,7 @@ import {
   TX_TYPE_LABELS,
 } from '../i18n/translations.ts';
 import type {
+  AccountUsageType,
   AppLanguage,
   Contact,
   ContactCategory,
@@ -12,6 +13,7 @@ import type {
   PaymentMethod,
   Transaction,
   TransactionType,
+  UserAccountProfile,
 } from '../types/ledger.ts';
 import {
   formatDateTimeFR,
@@ -59,6 +61,7 @@ export interface BackupPayload {
     hideDecimals?: boolean;
     csvDelimiter?: ';' | ',';
     whatsAppTemplate?: string;
+    account?: UserAccountProfile;
   };
 }
 
@@ -70,6 +73,7 @@ export interface ParsedBackupResult {
   hideDecimals?: boolean;
   csvDelimiter?: ';' | ',';
   whatsAppTemplate?: string;
+  account?: UserAccountProfile;
 }
 
 export function buildJSONBackup(db: LedgerDatabase): string {
@@ -86,6 +90,7 @@ export function buildJSONBackup(db: LedgerDatabase): string {
       hideDecimals: db.settings.hideDecimals,
       csvDelimiter: db.settings.csvDelimiter,
       whatsAppTemplate: db.settings.whatsAppTemplate,
+      account: db.settings.account,
     },
   };
   return JSON.stringify(payload, null, 2);
@@ -278,6 +283,24 @@ export function parseAndValidateBackupJSON(
       ? (obj.settings as Record<string, unknown>)
       : undefined;
 
+  const rawAccount =
+    settingsObj && settingsObj.account && typeof settingsObj.account === 'object'
+      ? (settingsObj.account as Record<string, unknown>)
+      : undefined;
+
+  const account: UserAccountProfile | undefined =
+    rawAccount && typeof rawAccount.fullName === 'string' && rawAccount.fullName.trim()
+      ? {
+          fullName: rawAccount.fullName.trim(),
+          phone: typeof rawAccount.phone === 'string' ? rawAccount.phone.trim() : '',
+          usageType:
+            rawAccount.usageType === 'personal'
+              ? ('personal' as AccountUsageType)
+              : ('business' as AccountUsageType),
+          createdAt: typeof rawAccount.createdAt === 'string' ? rawAccount.createdAt : nowISO,
+        }
+      : undefined;
+
   return {
     contacts,
     transactions,
@@ -301,6 +324,7 @@ export function parseAndValidateBackupJSON(
       settingsObj && typeof settingsObj.whatsAppTemplate === 'string'
         ? settingsObj.whatsAppTemplate
         : undefined,
+    account,
   };
 }
 

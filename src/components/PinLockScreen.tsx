@@ -39,6 +39,7 @@ interface PinLockScreenProps {
   pinHash: string;
   recoveryQuestion?: string;
   recoveryHash?: string | null;
+  accountLabel?: string;
   lang: AppLanguage;
   onUnlock: () => void;
   onRecoveredResetPin: () => void;
@@ -49,6 +50,7 @@ export function PinLockScreen({
   pinHash,
   recoveryQuestion,
   recoveryHash,
+  accountLabel,
   lang,
   onUnlock,
   onRecoveredResetPin,
@@ -146,7 +148,12 @@ export function PinLockScreen({
           <Lock className="h-8 w-8" />
         </div>
         <h1 className="mt-4 text-xl font-extrabold tracking-tight">{t.lockedTitle}</h1>
-        <p className="mt-1 text-sm text-slate-400">{t.enterPinPrompt}</p>
+        {accountLabel && (
+          <p className="mt-1 rounded-full bg-slate-800/90 px-3 py-0.5 text-xs font-bold text-teal-300">
+            {accountLabel}
+          </p>
+        )}
+        <p className="mt-1.5 text-sm text-slate-400">{t.enterPinPrompt}</p>
 
         {/* PIN Dots */}
         <div dir="ltr" className={`mt-7 flex gap-4 ${error ? 'animate-shake' : ''}`}>

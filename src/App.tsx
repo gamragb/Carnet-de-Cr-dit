@@ -10,6 +10,10 @@ import {
   Sun,
   X,
 } from 'lucide-react';
+import {
+  AccountOnboardingScreen,
+  type AccountRegistrationPayload,
+} from './components/AccountOnboardingScreen.tsx';
 import { BottomNav, type NavTab } from './components/BottomNav.tsx';
 import { ConfirmDialog } from './components/ConfirmDialog.tsx';
 import { ContactModal } from './components/ContactModal.tsx';
@@ -19,6 +23,7 @@ import { TransactionModal } from './components/TransactionModal.tsx';
 import { ToastProvider, useToast } from './context/ToastContext.tsx';
 import { UI_TEXT } from './i18n/translations.ts';
 import type {
+  AccountUsageType,
   AppLanguage,
   AppTheme,
   Contact,
@@ -55,7 +60,7 @@ import { isNativeApp } from './utils/nativePlatform.ts';
 import { hashPin, hashRecoveryAnswer } from './utils/security.ts';
 import {
   createEmptyDatabase,
-  createSampleSeedData,
+  createInitialDatabase,
   generateId,
   loadDatabaseSync,
   loadFromIndexedDB,
@@ -170,10 +175,11 @@ function LedgerApp() {
     };
   }, [initialLoad]);
 
-  // Persist changes to LocalStorage + serialized IndexedDB queue (only once hydrated & changed or new seed)
+  // Persist changes to LocalStorage + serialized IndexedDB queue (only once hydrated & mutated)
   useEffect(() => {
     if (!idbHydrated) return;
     if (!hasMutatedRef.current && initialLoad.fromLocalStorage) return;
+    if (!hasMutatedRef.current && !db.settings.accountRegistered) return;
     saveDatabaseSync(db);
   }, [db, idbHydrated, initialLoad.fromLocalStorage]);
 
@@ -736,19 +742,145 @@ function LedgerApp() {
   };
 
   const handleEmergencyResetData = () => {
-    const resetDb = createEmptyDatabase({
-      ...db.settings,
-      pinEnabled: false,
-      pinHash: null,
-      pinRecoveryQuestion: '',
-      pinRecoveryHash: null,
-      lastBackupAt: undefined,
-    });
+    const fresh = createInitialDatabase(lang);
+    const resetDb: LedgerDatabase = {
+      ...fresh,
+      settings: {
+        ...fresh.settings,
+        language: db.settings.language,
+        theme: db.settings.theme,
+        updateManifestUrl: db.settings.updateManifestUrl || DEFAULT_UPDATE_MANIFEST_URL,
+      },
+    };
     updateDb(resetDb);
     setSelectedContactId(null);
     setActiveTab('dashboard');
     setIsUnlocked(true);
     showToast(t.toasts.dataCleared, 'info');
+  };
+
+  const handleRegisterAccount = async (payload: AccountRegistrationPayload) => {
+    const now = new Date().toISOString();
+    let pinHash: string | null = null;
+    let recoveryHash: string | null = null;
+
+    if (payload.pin) {
+      pinHash = await hashPin(payload.pin, payload.language);
+      if (payload.recovery?.question && payload.recovery?.answer) {
+        recoveryHash = await hashRecoveryAnswer(payload.recovery.answer);
+      }
+    }
+
+    updateDb((prev) => ({
+      ...prev,
+      initialized: true,
+      contacts: [],
+      transactions: [],
+      settings: {
+        ...prev.settings,
+        language: payload.language,
+        businessName: payload.businessName,
+        accountRegistered: true,
+        account: {
+          fullName: payload.fullName,
+          phone: payload.phone,
+          usageType: payload.usageType,
+          createdAt: now,
+        },
+        pinEnabled: Boolean(pinHash),
+        pinHash,
+        pinRecoveryQuestion: payload.recovery?.question ?? '',
+        pinRecoveryHash: recoveryHash,
+      },
+    }));
+
+    lastActivityRef.current = Date.now();
+    setSelectedContactId(null);
+    setActiveTab('dashboard');
+    setIsUnlocked(true);
+    showToast(UI_TEXT[payload.language].toasts.accountCreated(payload.fullName));
+  };
+
+  const handleRestoreFromOnboarding = (payload: ParsedBackupResult) => {
+    const now = new Date().toISOString();
+    const targetLang = payload.language ?? lang;
+    updateDb((prev) => ({
+      ...prev,
+      initialized: true,
+      contacts: payload.contacts,
+      transactions: payload.transactions,
+      settings: {
+        ...prev.settings,
+        accountRegistered: true,
+        account:
+          payload.account ??
+          (payload.businessName
+            ? {
+                fullName: payload.businessName,
+                phone: '',
+                usageType: 'business',
+                createdAt: now,
+              }
+            : prev.settings.account),
+        businessName: payload.businessName ?? prev.settings.businessName,
+        language: targetLang,
+        hideDecimals: payload.hideDecimals ?? prev.settings.hideDecimals,
+        csvDelimiter: payload.csvDelimiter ?? prev.settings.csvDelimiter,
+        whatsAppTemplate: payload.whatsAppTemplate ?? prev.settings.whatsAppTemplate,
+      },
+    }));
+    lastActivityRef.current = Date.now();
+    setSelectedContactId(null);
+    setActiveTab('dashboard');
+    setIsUnlocked(true);
+    showToast(
+      UI_TEXT[targetLang].toasts.backupRestored(
+        payload.contacts.length,
+        payload.transactions.length
+      )
+    );
+  };
+
+  const handleUpdateAccountProfile = (data: {
+    fullName: string;
+    phone: string;
+    businessName: string;
+    usageType: AccountUsageType;
+  }) => {
+    const now = new Date().toISOString();
+    updateDb((prev) => ({
+      ...prev,
+      settings: {
+        ...prev.settings,
+        businessName: data.businessName,
+        accountRegistered: true,
+        account: {
+          fullName: data.fullName,
+          phone: data.phone,
+          usageType: data.usageType,
+          createdAt: prev.settings.account?.createdAt ?? now,
+        },
+      },
+    }));
+    showToast(t.toasts.accountUpdated);
+  };
+
+  const handleResetAccount = () => {
+    const fresh = createInitialDatabase(lang);
+    const resetDb: LedgerDatabase = {
+      ...fresh,
+      settings: {
+        ...fresh.settings,
+        language: db.settings.language,
+        theme: db.settings.theme,
+        updateManifestUrl: db.settings.updateManifestUrl || DEFAULT_UPDATE_MANIFEST_URL,
+      },
+    };
+    updateDb(resetDb);
+    setSelectedContactId(null);
+    setActiveTab('dashboard');
+    setIsUnlocked(true);
+    showToast(t.toasts.accountReset, 'info');
   };
 
   const handleMarkBackedUp = () => {
@@ -796,6 +928,8 @@ function LedgerApp() {
       transactions: payload.transactions,
       settings: {
         ...prev.settings,
+        accountRegistered: true,
+        account: payload.account ?? prev.settings.account,
         businessName: payload.businessName ?? prev.settings.businessName,
         language: payload.language ?? prev.settings.language,
         hideDecimals: payload.hideDecimals ?? prev.settings.hideDecimals,
@@ -834,19 +968,6 @@ function LedgerApp() {
     updateDb((prev) => createEmptyDatabase(prev.settings));
     setSelectedContactId(null);
     showToast(t.toasts.dataCleared, 'info');
-  };
-
-  const handleLoadSampleData = () => {
-    const sample = createSampleSeedData(lang);
-    updateDb((prev) => ({
-      ...prev,
-      initialized: true,
-      contacts: sample.contacts,
-      transactions: sample.transactions,
-    }));
-    setSelectedContactId(null);
-    setActiveTab('dashboard');
-    showToast(t.toasts.sampleLoaded);
   };
 
   const handleEnableNotifications = async (): Promise<boolean> => {
@@ -991,12 +1112,37 @@ function LedgerApp() {
     void handleCheckForUpdates(true, configuredUrl);
   }, [idbHydrated, db.settings.updateManifestUrl, handleCheckForUpdates]);
 
+  const accountDisplayLabel =
+    db.settings.businessName.trim() || db.settings.account?.fullName?.trim() || '';
+
+  if (!idbHydrated && !initialLoad.fromLocalStorage) {
+    return (
+      <div className="flex min-h-dvh items-center justify-center bg-slate-50 dark:bg-slate-950">
+        <div className="flex h-14 w-14 animate-pulse items-center justify-center rounded-3xl bg-teal-700 text-white shadow-lg">
+          <BookOpenCheck className="h-7 w-7" />
+        </div>
+      </div>
+    );
+  }
+
+  if (!db.settings.accountRegistered) {
+    return (
+      <AccountOnboardingScreen
+        lang={lang}
+        onChangeLanguage={handleChangeLanguage}
+        onRegister={handleRegisterAccount}
+        onRestoreBackup={handleRestoreFromOnboarding}
+      />
+    );
+  }
+
   if (!isUnlocked && db.settings.pinEnabled && db.settings.pinHash) {
     return (
       <PinLockScreen
         pinHash={db.settings.pinHash}
         recoveryQuestion={db.settings.pinRecoveryQuestion}
         recoveryHash={db.settings.pinRecoveryHash}
+        accountLabel={accountDisplayLabel || undefined}
         lang={lang}
         onUnlock={() => {
           lastActivityRef.current = Date.now();
@@ -1032,7 +1178,7 @@ function LedgerApp() {
                 {t.appName}
               </h1>
               <p className="truncate text-[11px] font-medium text-slate-500 dark:text-slate-400">
-                {db.settings.businessName.trim() || t.appSubtitleDefault}
+                {accountDisplayLabel || t.appSubtitleDefault}
               </p>
             </div>
           </button>
@@ -1256,12 +1402,7 @@ function LedgerApp() {
             onChangeTheme={handleChangeTheme}
             onToggleHideAmounts={handleToggleHideAmounts}
             onToggleHideDecimals={handleToggleHideDecimals}
-            onUpdateBusinessName={(name) =>
-              updateDb((prev) => ({
-                ...prev,
-                settings: { ...prev.settings, businessName: name },
-              }))
-            }
+            onUpdateAccountProfile={handleUpdateAccountProfile}
             onUpdateAutoLockMinutes={(minutes) =>
               updateDb((prev) => ({
                 ...prev,
@@ -1299,7 +1440,7 @@ function LedgerApp() {
             onRestoreBackup={handleRestoreBackup}
             onImportCsv={handleImportCsv}
             onClearAllData={handleClearAllData}
-            onLoadSampleData={handleLoadSampleData}
+            onResetAccount={handleResetAccount}
           />
         )}
       </main>

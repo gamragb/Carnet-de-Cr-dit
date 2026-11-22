@@ -1,5 +1,6 @@
 import { DEFAULT_UPDATE_MANIFEST_URL } from '../config/updateConfig.ts';
 import type {
+  AccountUsageType,
   AppLanguage,
   AppSettings,
   Contact,
@@ -8,6 +9,7 @@ import type {
   PaymentMethod,
   Transaction,
   TransactionType,
+  UserAccountProfile,
 } from '../types/ledger.ts';
 import { roundMoney } from './formatters.ts';
 
@@ -55,6 +57,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   whatsAppTemplate: '',
   notificationsEnabled: false,
   updateManifestUrl: DEFAULT_UPDATE_MANIFEST_URL,
+  accountRegistered: false,
 };
 
 function offsetDaysISO(daysOffset: number, time = '10:30'): { date: string; datetime: string } {
@@ -198,13 +201,12 @@ export function createSampleSeedData(lang: AppLanguage = 'fr'): {
 }
 
 export function createInitialDatabase(lang: AppLanguage = 'fr'): LedgerDatabase {
-  const seed = createSampleSeedData(lang);
   return {
     version: 1,
     initialized: true,
-    contacts: seed.contacts,
-    transactions: seed.transactions,
-    settings: { ...DEFAULT_SETTINGS, language: lang },
+    contacts: [],
+    transactions: [],
+    settings: { ...DEFAULT_SETTINGS, language: lang, accountRegistered: false },
   };
 }
 
@@ -308,6 +310,35 @@ export function normalizeLoadedDb(raw: unknown): LedgerDatabase | null {
   }
 
   const rawSettings = (data.settings ?? {}) as Partial<AppSettings>;
+  const rawAccount =
+    rawSettings.account && typeof rawSettings.account === 'object'
+      ? (rawSettings.account as Partial<UserAccountProfile>)
+      : undefined;
+
+  const account: UserAccountProfile | undefined =
+    rawAccount && typeof rawAccount.fullName === 'string' && rawAccount.fullName.trim()
+      ? {
+          fullName: rawAccount.fullName.trim(),
+          phone: typeof rawAccount.phone === 'string' ? rawAccount.phone.trim() : '',
+          usageType:
+            rawAccount.usageType === 'personal'
+              ? ('personal' as AccountUsageType)
+              : ('business' as AccountUsageType),
+          createdAt: typeof rawAccount.createdAt === 'string' ? rawAccount.createdAt : nowISO,
+        }
+      : undefined;
+
+  const inferredRegistered =
+    typeof rawSettings.accountRegistered === 'boolean'
+      ? rawSettings.accountRegistered
+      : Boolean(
+          account ||
+            contacts.length > 0 ||
+            transactions.length > 0 ||
+            (typeof rawSettings.businessName === 'string' && rawSettings.businessName.trim()) ||
+            (rawSettings.pinEnabled && rawSettings.pinHash)
+        );
+
   const settings: AppSettings = {
     ...DEFAULT_SETTINGS,
     ...rawSettings,
@@ -343,6 +374,8 @@ export function normalizeLoadedDb(raw: unknown): LedgerDatabase | null {
       typeof rawSettings.lastUpdateCheckAt === 'string'
         ? rawSettings.lastUpdateCheckAt
         : undefined,
+    accountRegistered: inferredRegistered,
+    account,
   };
 
   return {
@@ -378,11 +411,6 @@ export function loadDatabaseSync(): {
   }
 
   const initial = createInitialDatabase('fr');
-  try {
-    window.localStorage.setItem(LS_KEY, JSON.stringify(initial));
-  } catch {
-    // Ignore LocalStorage quota errors
-  }
   return { db: initial, fromLocalStorage: false, idbAhead: true };
 }
 

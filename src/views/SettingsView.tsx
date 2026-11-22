@@ -10,17 +10,20 @@ import {
   KeyRound,
   Languages,
   Lock,
+  LogOut,
   Moon,
+  Phone,
   RefreshCw,
   RotateCcw,
   Shield,
   ShieldCheck,
   Smartphone,
-  Sparkles,
   Store,
   Sun,
   Trash2,
   Upload,
+  User,
+  UserCog,
   X,
 } from 'lucide-react';
 import { ConfirmDialog } from '../components/ConfirmDialog.tsx';
@@ -28,6 +31,7 @@ import { PinSetupModal } from '../components/PinLockScreen.tsx';
 import { useToast } from '../context/ToastContext.tsx';
 import { UI_TEXT } from '../i18n/translations.ts';
 import type {
+  AccountUsageType,
   AppLanguage,
   AppTheme,
   Contact,
@@ -42,7 +46,12 @@ import {
   triggerFileDownload,
   type ParsedBackupResult,
 } from '../utils/exportImport.ts';
-import { formatDateTimeFR, getTodayISODate } from '../utils/formatters.ts';
+import {
+  formatDateTimeFR,
+  formatMoroccanPhone,
+  getTodayISODate,
+  isValidPhoneInput,
+} from '../utils/formatters.ts';
 import type { UpdateCheckResult } from '../utils/appUpdater.ts';
 import {
   canUseStrongEncryption,
@@ -57,7 +66,12 @@ interface SettingsViewProps {
   onChangeTheme: (theme: AppTheme) => void;
   onToggleHideAmounts: () => void;
   onToggleHideDecimals: () => void;
-  onUpdateBusinessName: (name: string) => void;
+  onUpdateAccountProfile: (data: {
+    fullName: string;
+    phone: string;
+    businessName: string;
+    usageType: AccountUsageType;
+  }) => void;
   onUpdateAutoLockMinutes: (minutes: number) => void;
   onUpdateCsvDelimiter: (delimiter: ',' | ';') => void;
   onUpdateWhatsAppTemplate: (template: string) => void;
@@ -84,7 +98,7 @@ interface SettingsViewProps {
     skippedRows: number;
   }) => void;
   onClearAllData: () => void;
-  onLoadSampleData: () => void;
+  onResetAccount: () => void;
 }
 
 const AUTO_LOCK_OPTIONS = [0, 1, 5, 15];
@@ -95,7 +109,7 @@ export function SettingsView({
   onChangeTheme,
   onToggleHideAmounts,
   onToggleHideDecimals,
-  onUpdateBusinessName,
+  onUpdateAccountProfile,
   onUpdateAutoLockMinutes,
   onUpdateCsvDelimiter,
   onUpdateWhatsAppTemplate,
@@ -113,18 +127,30 @@ export function SettingsView({
   onRestoreBackup,
   onImportCsv,
   onClearAllData,
-  onLoadSampleData,
+  onResetAccount,
 }: SettingsViewProps) {
   const { showToast } = useToast();
   const lang = db.settings.language;
   const s = UI_TEXT[lang].settingsView;
   const d = UI_TEXT[lang].dialogs;
 
+  const [fullNameInput, setFullNameInput] = useState(db.settings.account?.fullName ?? '');
+  const [phoneInput, setPhoneInput] = useState(db.settings.account?.phone ?? '');
+  const [usageTypeInput, setUsageTypeInput] = useState<AccountUsageType>(
+    db.settings.account?.usageType ?? 'business'
+  );
   const [businessNameInput, setBusinessNameInput] = useState(db.settings.businessName);
+  const [accountError, setAccountError] = useState('');
   const [waTemplateInput, setWaTemplateInput] = useState(db.settings.whatsAppTemplate);
   const [updateUrlInput, setUpdateUrlInput] = useState(
     db.settings.updateManifestUrl ?? ''
   );
+
+  useEffect(() => {
+    setFullNameInput(db.settings.account?.fullName ?? '');
+    setPhoneInput(db.settings.account?.phone ?? '');
+    setUsageTypeInput(db.settings.account?.usageType ?? 'business');
+  }, [db.settings.account]);
 
   useEffect(() => {
     setBusinessNameInput(db.settings.businessName);
@@ -140,7 +166,7 @@ export function SettingsView({
 
   const [pinModalMode, setPinModalMode] = useState<'enable' | 'change' | 'disable' | null>(null);
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
-  const [confirmSampleOpen, setConfirmSampleOpen] = useState(false);
+  const [confirmResetAccountOpen, setConfirmResetAccountOpen] = useState(false);
   const [pendingRestore, setPendingRestore] = useState<ParsedBackupResult | null>(null);
 
   // Encrypted backup passphrase modal state
@@ -154,10 +180,27 @@ export function SettingsView({
   const jsonInputRef = useRef<HTMLInputElement | null>(null);
   const csvInputRef = useRef<HTMLInputElement | null>(null);
 
-  const handleSaveBusiness = (e: React.FormEvent) => {
+  const handleSaveAccountProfile = (e: React.FormEvent) => {
     e.preventDefault();
-    onUpdateBusinessName(businessNameInput.trim());
-    showToast(s.businessUpdatedToast);
+    setAccountError('');
+    const cleanName = fullNameInput.trim();
+    if (cleanName.length < 2) {
+      setAccountError(s.accountFullNameError);
+      return;
+    }
+    const cleanPhone = phoneInput.trim();
+    if (cleanPhone && !isValidPhoneInput(cleanPhone)) {
+      setAccountError(UI_TEXT[lang].onboarding.phoneInvalidError);
+      return;
+    }
+    const formattedPhone = cleanPhone ? formatMoroccanPhone(cleanPhone) : '';
+    setPhoneInput(formattedPhone);
+    onUpdateAccountProfile({
+      fullName: cleanName,
+      phone: formattedPhone,
+      businessName: businessNameInput.trim(),
+      usageType: usageTypeInput,
+    });
   };
 
   const handleSaveUpdateUrl = (e: React.FormEvent) => {
@@ -326,6 +369,132 @@ export function SettingsView({
         <p className="text-xs text-slate-500 dark:text-slate-400">{s.subtitle}</p>
       </div>
 
+      {/* Registered Account Profile */}
+      <section className="space-y-3.5 rounded-3xl border border-slate-200/90 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex items-center justify-between gap-2.5">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-teal-700 text-sm font-extrabold text-white shadow-xs">
+              {(db.settings.account?.fullName || db.settings.businessName || 'C')
+                .trim()
+                .slice(0, 2)
+                .toUpperCase()}
+            </div>
+            <div className="min-w-0">
+              <h3 className="flex items-center gap-1.5 text-sm font-extrabold text-slate-900 dark:text-white">
+                <UserCog className="h-4 w-4 text-teal-700 dark:text-teal-400" />
+                <span>{s.accountSectionTitle}</span>
+              </h3>
+              <p className="truncate text-xs text-slate-500 dark:text-slate-400">
+                {db.settings.account?.createdAt
+                  ? s.accountSinceLabel(
+                      formatDateTimeFR(db.settings.account.createdAt, lang).date
+                    )
+                  : s.accountSectionDesc}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <form onSubmit={handleSaveAccountProfile} className="space-y-3">
+          {accountError && (
+            <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 dark:border-rose-900 dark:bg-rose-950/60 dark:text-rose-300">
+              {accountError}
+            </div>
+          )}
+
+          <div>
+            <label className="flex items-center gap-1.5 text-xs font-bold text-slate-700 dark:text-slate-300">
+              <User className="h-3.5 w-3.5 text-teal-700 dark:text-teal-400" />
+              {s.accountFullNameLabel}
+            </label>
+            <input
+              type="text"
+              value={fullNameInput}
+              onChange={(e) => {
+                setFullNameInput(e.target.value);
+                if (accountError) setAccountError('');
+              }}
+              placeholder={s.accountFullNamePlaceholder}
+              className="mt-1 min-h-[42px] w-full rounded-2xl border border-slate-200 bg-slate-50 px-3.5 text-sm font-medium text-slate-900 outline-none focus:border-teal-600 focus:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-white dark:focus:bg-slate-900"
+            />
+          </div>
+
+          <div>
+            <p className="mb-1 text-xs font-bold text-slate-700 dark:text-slate-300">
+              {s.accountUsageLabel}
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setUsageTypeInput('business')}
+                className={`flex min-h-[40px] items-center justify-center gap-1.5 rounded-2xl border px-3 text-xs font-bold transition ${
+                  usageTypeInput === 'business'
+                    ? 'border-teal-600 bg-teal-700 text-white'
+                    : 'border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200'
+                }`}
+              >
+                <Store className="h-3.5 w-3.5" />
+                <span>{s.accountUsageBusiness}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setUsageTypeInput('personal')}
+                className={`flex min-h-[40px] items-center justify-center gap-1.5 rounded-2xl border px-3 text-xs font-bold transition ${
+                  usageTypeInput === 'personal'
+                    ? 'border-teal-600 bg-teal-700 text-white'
+                    : 'border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200'
+                }`}
+              >
+                <User className="h-3.5 w-3.5" />
+                <span>{s.accountUsagePersonal}</span>
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <label className="flex items-center gap-1.5 text-xs font-bold text-slate-700 dark:text-slate-300">
+              <Store className="h-3.5 w-3.5 text-teal-700 dark:text-teal-400" />
+              {s.businessLabel}
+            </label>
+            <input
+              type="text"
+              value={businessNameInput}
+              onChange={(e) => setBusinessNameInput(e.target.value)}
+              placeholder={s.businessPlaceholder}
+              className="mt-1 min-h-[42px] w-full rounded-2xl border border-slate-200 bg-slate-50 px-3.5 text-sm font-medium text-slate-900 outline-none focus:border-teal-600 focus:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-white dark:focus:bg-slate-900"
+            />
+            <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+              {s.businessHint}
+            </p>
+          </div>
+
+          <div>
+            <label className="flex items-center gap-1.5 text-xs font-bold text-slate-700 dark:text-slate-300">
+              <Phone className="h-3.5 w-3.5 text-teal-700 dark:text-teal-400" />
+              {s.accountPhoneLabel}
+            </label>
+            <input
+              type="tel"
+              dir="ltr"
+              value={phoneInput}
+              onChange={(e) => {
+                setPhoneInput(e.target.value);
+                if (accountError) setAccountError('');
+              }}
+              placeholder={s.accountPhonePlaceholder}
+              className="mt-1 min-h-[42px] w-full rounded-2xl border border-slate-200 bg-slate-50 px-3.5 text-sm font-medium text-slate-900 outline-none focus:border-teal-600 focus:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-white dark:focus:bg-slate-900"
+            />
+          </div>
+
+          <button
+            type="submit"
+            className="min-h-[44px] w-full rounded-2xl bg-slate-900 px-4 text-xs font-bold text-white transition hover:bg-slate-800 dark:bg-teal-700 dark:hover:bg-teal-600"
+          >
+            {s.accountSaveBtn}
+          </button>
+        </form>
+      </section>
+
       {/* Language Selector */}
       <section className="rounded-3xl border border-slate-200/90 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <div className="flex items-center gap-2.5">
@@ -416,33 +585,10 @@ export function SettingsView({
         </div>
       </section>
 
-      {/* Shop / Business Name & Display Toggles */}
+      {/* Display Preferences */}
       <section className="space-y-4 rounded-3xl border border-slate-200/90 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-        <form onSubmit={handleSaveBusiness} className="space-y-2">
-          <label className="flex items-center gap-2 text-xs font-bold text-slate-700 dark:text-slate-300">
-            <Store className="h-4 w-4 text-teal-700 dark:text-teal-400" />
-            {s.businessLabel}
-          </label>
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={businessNameInput}
-              onChange={(e) => setBusinessNameInput(e.target.value)}
-              placeholder={s.businessPlaceholder}
-              className="min-h-[44px] flex-1 rounded-2xl border border-slate-200 bg-slate-50 px-3.5 text-sm font-medium text-slate-900 outline-none focus:border-teal-600 focus:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-white dark:focus:bg-slate-900"
-            />
-            <button
-              type="submit"
-              className="min-h-[44px] shrink-0 rounded-2xl bg-slate-900 px-4 text-xs font-bold text-white transition hover:bg-slate-800 dark:bg-teal-700 dark:hover:bg-teal-600"
-            >
-              {s.okBtn}
-            </button>
-          </div>
-          <p className="text-[11px] text-slate-500 dark:text-slate-400">{s.businessHint}</p>
-        </form>
-
         {/* Discreet mode */}
-        <div className="flex items-center justify-between border-t border-slate-100 pt-3 dark:border-slate-800">
+        <div className="flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300">
               {db.settings.hideAmounts ? (
@@ -882,7 +1028,7 @@ export function SettingsView({
         </form>
       </section>
 
-      {/* Local Data & Demo Management */}
+      {/* Local Data & Account Reset */}
       <section className="space-y-3 rounded-3xl border border-slate-200/90 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <h3 className="text-sm font-extrabold text-slate-900 dark:text-white">
           {s.localDataTitle}
@@ -890,20 +1036,20 @@ export function SettingsView({
         <div className="grid grid-cols-2 gap-2">
           <button
             type="button"
-            onClick={() => setConfirmSampleOpen(true)}
+            onClick={() => setConfirmClearOpen(true)}
             className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-2xl border border-amber-200 bg-amber-50 px-3 text-xs font-bold text-amber-800 transition hover:bg-amber-100 dark:border-amber-900/50 dark:bg-amber-950/50 dark:text-amber-300"
           >
-            <Sparkles className="h-4 w-4 shrink-0" />
-            <span className="truncate">{s.loadSampleBtn}</span>
+            <Trash2 className="h-4 w-4 shrink-0" />
+            <span className="truncate">{s.clearTestBtn}</span>
           </button>
 
           <button
             type="button"
-            onClick={() => setConfirmClearOpen(true)}
+            onClick={() => setConfirmResetAccountOpen(true)}
             className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-2xl border border-rose-200 bg-rose-50 px-3 text-xs font-bold text-rose-700 transition hover:bg-rose-100 dark:border-rose-900/50 dark:bg-rose-950/50 dark:text-rose-300"
           >
-            <Trash2 className="h-4 w-4 shrink-0" />
-            <span className="truncate">{s.clearTestBtn}</span>
+            <LogOut className="h-4 w-4 shrink-0" />
+            <span className="truncate">{s.resetAccountBtn}</span>
           </button>
         </div>
       </section>
@@ -1112,18 +1258,19 @@ export function SettingsView({
         onCancel={() => setConfirmClearOpen(false)}
       />
 
-      {/* Load Sample Data Confirmation */}
+      {/* Reset Entire Account Confirmation */}
       <ConfirmDialog
-        open={confirmSampleOpen}
+        open={confirmResetAccountOpen}
         lang={lang}
-        title={s.confirmSampleTitle}
-        description={s.confirmSampleDesc}
-        confirmLabel={s.confirmSampleBtn}
+        title={s.confirmResetAccountTitle}
+        description={s.confirmResetAccountDesc}
+        confirmLabel={s.confirmResetAccountBtn}
+        danger
         onConfirm={() => {
-          onLoadSampleData();
-          setConfirmSampleOpen(false);
+          onResetAccount();
+          setConfirmResetAccountOpen(false);
         }}
-        onCancel={() => setConfirmSampleOpen(false)}
+        onCancel={() => setConfirmResetAccountOpen(false)}
       />
     </div>
   );
