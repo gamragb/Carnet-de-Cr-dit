@@ -27,14 +27,60 @@ import { computeAllLedgers, TRANSACTION_TYPE_META } from './ledgerMath.ts';
 import { isNativeApp, shareOrSaveNativeTextFile } from './nativePlatform.ts';
 import { generateId } from './storage.ts';
 
+export const EMAIL_BACKUP_B64_PREFIX = 'CARNET-BACKUP-V1:';
+
+export function encodeUtf8Base64(str: string): string {
+  const bytes = new TextEncoder().encode(str);
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+export function decodeUtf8Base64(b64: string): string {
+  const clean = b64.replace(/[^A-Za-z0-9+/=]/g, '');
+  if (!clean) return '';
+  const binary = atob(clean);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return new TextDecoder().decode(bytes);
+}
+
 /**
  * Extracts a JSON backup object even if the user copied extra email headers/text around it.
+ * Supports both `CARNET-BACKUP-V1:<base64>` email tokens and raw `{...}` JSON blocks.
  */
 export function extractBackupJsonFromText(rawText: string): string {
   const trimmed = rawText.trim();
   if (!trimmed) return '';
 
-  // Fast path: already valid JSON object
+  // 1. Check for Base64 email backup token (`CARNET-BACKUP-V1:<base64>`)
+  const b64Idx = trimmed.indexOf(EMAIL_BACKUP_B64_PREFIX);
+  if (b64Idx !== -1) {
+    const afterPrefix = trimmed.slice(b64Idx + EMAIL_BACKUP_B64_PREFIX.length);
+    const b64Match = afterPrefix.match(/^\s*([A-Za-z0-9+/=\r\n\t ]+)/);
+    if (b64Match?.[1]) {
+      // Stop at any double-newline or non-base64 boundary line
+      const firstBlock = b64Match[1].split(/\r?\n\s*\r?\n|---/)[0] ?? '';
+      try {
+        const decoded = decodeUtf8Base64(firstBlock).trim();
+        if (decoded.startsWith('{') && decoded.endsWith('}')) {
+          const parsed = JSON.parse(decoded) as Record<string, unknown>;
+          if (parsed && typeof parsed === 'object') {
+            return decoded;
+          }
+        }
+      } catch {
+        // Fall through to raw JSON search
+      }
+    }
+  }
+
+  // 2. Fast path: already valid JSON object
   if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
     try {
       const parsed = JSON.parse(trimmed) as Record<string, unknown>;

@@ -317,8 +317,8 @@ public final class DriveRestHelper {
         try {
             URL url = new URL(urlStr);
             conn = (HttpURLConnection) url.openConnection();
-            conn.setConnectTimeout(10000);
-            conn.setReadTimeout(12000);
+            conn.setConnectTimeout(25000);
+            conn.setReadTimeout(65000);
             conn.setInstanceFollowRedirects(true);
             conn.setRequestMethod("POST");
             conn.setRequestProperty("Content-Type", contentType);

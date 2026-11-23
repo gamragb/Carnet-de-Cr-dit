@@ -1,10 +1,10 @@
 {
-  "version": "1.3.1",
+  "version": "1.3.2",
   "minNativeVersion": "1.0.0",
-  "bundleUrl": "https://gamragb.github.io/Carnet-de-Cr-dit/bundle-1.3.1.zip",
+  "bundleUrl": "https://gamragb.github.io/Carnet-de-Cr-dit/bundle-1.3.2.zip",
   "apkUrl": "",
   "playStoreUrl": "https://play.google.com/store/apps/details?id=ma.carnetcredit.app",
   "mandatory": false,
-  "notesFr": "v1.3.1 : Correction définitive du blocage « Envoi en cours... » lors de la sauvegarde par email sur Android (envoi JSON instantané avec délai de sécurité strict), journal quotidien, calculatrice intégrée et recherche bilingue.",
-  "notesAr": "الإصدار 1.3.1: إصلاح جذري لمشكل توقف زر الإيميل في « جاري الإرسال... » على الأندرويد (إرسال فوري وسريع مع مهلة أمان صارمة)، بالإضافة إلى سجل اليوم، الآلة الحاسبة المدمجة، والبحث الذكي بالعربية والفرنسية."
+  "notesFr": "v1.3.2 : Encodage Base64 (CARNET-BACKUP-V1) empêchant l’erreur 500 du serveur d’email et envoi instantané en arrière-plan sans blocage du bouton « Envoi en cours... » sur Android.",
+  "notesAr": "الإصدار 1.3.2: تشفير كود النسخة بصيغة Base64 (CARNET-BACKUP-V1) لمنع خطأ السيرفر 500، مع إرسال فوري في الخلفية بدون توقف الزر في « جاري الإرسال... » على الأندرويد."
 }

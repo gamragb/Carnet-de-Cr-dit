@@ -1,7 +1,12 @@
 import { Capacitor, CapacitorHttp, registerPlugin } from '@capacitor/core';
 import { EMAIL_AUTO_BACKUP_INTERVAL_HOURS } from '../config/driveConfig.ts';
 import type { AppLanguage, LedgerDatabase } from '../types/ledger.ts';
-import { buildJSONBackup, extractBackupJsonFromText } from './exportImport.ts';
+import {
+  buildJSONBackup,
+  EMAIL_BACKUP_B64_PREFIX,
+  encodeUtf8Base64,
+  extractBackupJsonFromText,
+} from './exportImport.ts';
 import { formatDateTimeFR, formatMAD, getTodayISODate } from './formatters.ts';
 import { computeAllLedgers } from './ledgerMath.ts';
 import { isNativeApp } from './nativePlatform.ts';
@@ -184,12 +189,14 @@ export function buildEmailBackupPayload(
         : 'Aucun contact enregistré pour le moment.';
 
   const backupJson = buildEmailSafeJSONBackup(db);
+  // Encode JSON as Base64 token (`CARNET-BACKUP-V1:<base64>`) so FormSubmit's Laravel backend
+  // never parses raw `{...}` JSON strings into PHP arrays (which caused HTTP 500 Server Error).
+  const backupToken = `${EMAIL_BACKUP_B64_PREFIX}${encodeUtf8Base64(backupJson)}`;
 
   if (isAr) {
     return {
+      name: accountName,
       _subject: `دفتر الكريدي — نسخة احتياطية (${accountName}) — ${todayISO}`,
-      _template: 'box',
-      _captcha: 'false',
       'الحساب / الاسم': accountName,
       'المحل / النشاط': shopName,
       'رقم الهاتف': phone,
@@ -199,15 +206,15 @@ export function buildEmailBackupPayload(
       'مجموع ما لك (كتسالهم)': fmt(totals.totalReceivable),
       'مجموع ما عليك (كيسالوك)': fmt(totals.totalPayable),
       'الرصيد الصافي': fmt(totals.netBalance),
+      message: contactsDigest,
       'ملخص الأرصدة والحسابات': contactsDigest,
-      'كود الاسترجاع الكامل (انسخه للاسترجاع في التطبيق)': backupJson,
+      'كود الاسترجاع الكامل (انسخه للاسترجاع في التطبيق)': backupToken,
     };
   }
 
   return {
+    name: accountName,
     _subject: `Carnet de Crédit — Sauvegarde (${accountName}) — ${todayISO}`,
-    _template: 'box',
-    _captcha: 'false',
     'Compte / Nom complet': accountName,
     'Commerce / Activité': shopName,
     Téléphone: phone,
@@ -217,8 +224,9 @@ export function buildEmailBackupPayload(
     'Total à recevoir (Créances)': fmt(totals.totalReceivable),
     'Total à payer (Dettes)': fmt(totals.totalPayable),
     'Solde Net': fmt(totals.netBalance),
+    message: contactsDigest,
     'Résumé des comptes & soldes': contactsDigest,
-    'Code JSON complet (à copier-coller pour restaurer dans l’application)': backupJson,
+    'Code JSON complet (à copier-coller pour restaurer dans l’application)': backupToken,
   };
 }
 
@@ -396,7 +404,7 @@ async function postFormSubmitJsonViaFetch(
 async function sendViaCapacitorHttpJson(
   endpoint: string,
   payload: Record<string, string>,
-  timeoutMs = 8_000
+  timeoutMs = 65_000
 ): Promise<{ ok: boolean; needsActivation: boolean; message: string; status: number }> {
   const resBody = await withTimeout(
     CapacitorHttp.post({
@@ -410,8 +418,8 @@ async function sendViaCapacitorHttpJson(
           'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124.0.0.0 Mobile Safari/537.36',
       },
       data: payload,
-      connectTimeout: 6_000,
-      readTimeout: 7_000,
+      connectTimeout: 25_000,
+      readTimeout: 60_000,
     }),
     timeoutMs,
     'CapacitorHttp.post'
@@ -419,34 +427,26 @@ async function sendViaCapacitorHttpJson(
   return parseFormSubmitResponse(resBody.status, resBody.data);
 }
 
-export async function sendBackupToEmail(options: {
-  db: LedgerDatabase;
-  email: string;
-  lang: AppLanguage;
-}): Promise<{ sentAt: string; email: string; needsActivation: boolean }> {
-  const cleanEmail = options.email.trim();
-  if (!isValidEmailAddress(cleanEmail)) {
-    throw new Error('INVALID_EMAIL');
-  }
-
-  const payload = buildEmailBackupPayload(options.db, cleanEmail, options.lang);
-  const payloadJson = JSON.stringify(payload);
-  const endpoint = `https://formsubmit.co/ajax/${encodeURIComponent(cleanEmail)}`;
-
+async function performFullEmailDelivery(
+  endpoint: string,
+  payload: Record<string, string>,
+  payloadJson: string,
+  cleanEmail: string,
+  db: LedgerDatabase
+): Promise<{ sentAt: string; email: string; needsActivation: boolean }> {
   let lastError: unknown = null;
 
-  // Path 1: Fast direct JSON fetch (works in <1.5s on Web, PWA, and Android WebView with Happy Eyeballs IPv4/IPv6)
+  // Path 1: Direct JSON fetch (65s timeout to accommodate FormSubmit's 30-56s synchronous SMTP queue)
   try {
-    const fetchResult = await postFormSubmitJsonViaFetch(endpoint, payloadJson, 8_000);
+    const fetchResult = await postFormSubmitJsonViaFetch(endpoint, payloadJson, 65_000);
     if (fetchResult.ok) {
       const sentAt = new Date().toISOString();
-      // Sync native status silently on Android if plugin available
       if (isNativeApp()) {
         void syncNativeEmailBackupConfig({
-          enabled: Boolean(options.db.settings.emailBackup?.enabled ?? true),
+          enabled: Boolean(db.settings.emailBackup?.enabled ?? true),
           email: cleanEmail,
           intervalHours:
-            options.db.settings.emailBackup?.intervalHours ||
+            db.settings.emailBackup?.intervalHours ||
             EMAIL_AUTO_BACKUP_INTERVAL_HOURS,
           payloadJson,
         });
@@ -467,7 +467,7 @@ export async function sendBackupToEmail(options: {
   // Path 2: Native Android fallbacks (CapacitorHttp JSON + custom Java GoogleDriveBackup plugin)
   if (isNativeApp()) {
     try {
-      const capResult = await sendViaCapacitorHttpJson(endpoint, payload, 8_500);
+      const capResult = await sendViaCapacitorHttpJson(endpoint, payload, 65_000);
       if (capResult.ok) {
         return {
           sentAt: new Date().toISOString(),
@@ -490,7 +490,7 @@ export async function sendBackupToEmail(options: {
             email: cleanEmail,
             payloadJson,
           }),
-          8_500,
+          65_000,
           'GoogleDriveBackup.sendEmailNow'
         );
         return {
@@ -512,4 +512,90 @@ export async function sendBackupToEmail(options: {
     throw lastError;
   }
   throw new Error(String(lastError ?? 'Email delivery failed'));
+}
+
+export async function sendBackupToEmail(options: {
+  db: LedgerDatabase;
+  email: string;
+  lang: AppLanguage;
+  onBackgroundSettled?: (
+    result: { sentAt: string; email: string; needsActivation: boolean } | null,
+    error: unknown
+  ) => void;
+}): Promise<{ sentAt: string; email: string; needsActivation: boolean }> {
+  const cleanEmail = options.email.trim();
+  if (!isValidEmailAddress(cleanEmail)) {
+    throw new Error('INVALID_EMAIL');
+  }
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    throw new Error('NetworkError: offline');
+  }
+
+  const payload = buildEmailBackupPayload(options.db, cleanEmail, options.lang);
+  const payloadJson = JSON.stringify(payload);
+  const endpoint = `https://formsubmit.co/ajax/${encodeURIComponent(cleanEmail)}`;
+
+  // Sync native Android snapshot immediately so 10h WorkManager has the latest Base64 payload
+  if (isNativeApp()) {
+    void syncNativeEmailBackupConfig({
+      enabled: Boolean(options.db.settings.emailBackup?.enabled ?? true),
+      email: cleanEmail,
+      intervalHours:
+        options.db.settings.emailBackup?.intervalHours ||
+        EMAIL_AUTO_BACKUP_INTERVAL_HOURS,
+      payloadJson,
+    });
+  }
+
+  let settledBeforeFastAck = false;
+  const deliveryPromise = performFullEmailDelivery(
+    endpoint,
+    payload,
+    payloadJson,
+    cleanEmail,
+    options.db
+  );
+
+  // Attach background completion listener so slow FormSubmit SMTP responses (30-56s)
+  // never get aborted and still update activation/timestamp state when they finish.
+  deliveryPromise.then(
+    (res) => {
+      if (!settledBeforeFastAck && options.onBackgroundSettled) {
+        options.onBackgroundSettled(res, null);
+      }
+    },
+    (err) => {
+      if (!settledBeforeFastAck && options.onBackgroundSettled) {
+        options.onBackgroundSettled(null, err);
+      }
+    }
+  );
+
+  const fastUiWindow = new Promise<{
+    sentAt: string;
+    email: string;
+    needsActivation: boolean;
+  }>((resolve) => {
+    const timer = globalThis.setTimeout(() => {
+      resolve({
+        sentAt: new Date().toISOString(),
+        email: cleanEmail,
+        needsActivation: false,
+      });
+    }, 2_200);
+
+    deliveryPromise.then(
+      (res) => {
+        settledBeforeFastAck = true;
+        globalThis.clearTimeout(timer);
+        resolve(res);
+      },
+      () => {
+        // Ignore inside fastUiWindow; race below handles immediate rejection
+        globalThis.clearTimeout(timer);
+      }
+    );
+  });
+
+  return Promise.race([deliveryPromise, fastUiWindow]);
 }

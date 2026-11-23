@@ -537,14 +537,20 @@ test('emailBackup: 10-hour email auto-backup scheduling, email validation, paylo
   assert.equal(payload['البريد الإلكتروني المسجل'], 'amine@gmail.com');
   assert.ok(payload['ملخص الأرصدة والحسابات'].includes('كريم بناني'));
 
-  // Simulate user copying the entire email message text around the JSON code block
+  // Simulate user copying the entire email message text around the Base64 token or JSON code block
   const pastedEmailBody = [
     'Subject: دفتر الكريدي — نسخة احتياطية',
     'الحساب: محمد أمين',
     'كود الاسترجاع الكامل:',
-    buildEmailSafeJSONBackup(dbWithEmail),
+    payload['كود الاسترجاع الكامل (انسخه للاسترجاع في التطبيق)'],
     '--- نهاية الرسالة ---',
   ].join('\n\n');
+
+  assert.ok(
+    payload['كود الاسترجاع الكامل (انسخه للاسترجاع في التطبيق)'].startsWith(
+      'CARNET-BACKUP-V1:'
+    )
+  );
 
   const extracted = extractBackupJsonFromText(pastedEmailBody);
   const restored = parseAndValidateBackupJSON(extracted, 'ar');

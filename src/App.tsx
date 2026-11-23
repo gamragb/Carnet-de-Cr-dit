@@ -1421,15 +1421,48 @@ function LedgerApp() {
     emailBackupBusyRef.current = true;
     setEmailBackupBusy(true);
     try {
+      const intervalHours =
+        currentDb.settings.emailBackup?.intervalHours ||
+        EMAIL_AUTO_BACKUP_INTERVAL_HOURS;
+
       const res = await sendBackupToEmail({
         db: currentDb,
         email: targetEmail,
         lang,
+        onBackgroundSettled: (bgRes, bgErr) => {
+          if (bgRes) {
+            updateDb((prev) => ({
+              ...prev,
+              settings: {
+                ...prev.settings,
+                lastBackupAt: bgRes.sentAt,
+                emailBackup: prev.settings.emailBackup
+                  ? {
+                      ...prev.settings.emailBackup,
+                      lastBackupAt: bgRes.sentAt,
+                      needsActivation: bgRes.needsActivation,
+                      lastError: undefined,
+                    }
+                  : prev.settings.emailBackup,
+              },
+            }));
+            if (bgRes.needsActivation) {
+              showToast(t.settingsView.emailBackupActivationToast(bgRes.email), 'info');
+            }
+          } else if (bgErr) {
+            const msg = formatEmailBackupError(bgErr, dbRef.current.settings.language);
+            updateDb((prev) => ({
+              ...prev,
+              settings: {
+                ...prev.settings,
+                emailBackup: prev.settings.emailBackup
+                  ? { ...prev.settings.emailBackup, lastError: msg }
+                  : prev.settings.emailBackup,
+              },
+            }));
+          }
+        },
       });
-
-      const intervalHours =
-        currentDb.settings.emailBackup?.intervalHours ||
-        EMAIL_AUTO_BACKUP_INTERVAL_HOURS;
 
       updateDb((prev) => ({
         ...prev,
