@@ -1397,12 +1397,14 @@ function LedgerApp() {
 
   const dbRef = useRef(db);
   dbRef.current = db;
+  const emailBackupBusyRef = useRef(emailBackupBusy);
+  emailBackupBusyRef.current = emailBackupBusy;
 
   const handleSendEmailBackupNow = async (
     overrideEmail?: string,
     overrideDb?: LedgerDatabase
   ) => {
-    if (emailBackupBusy) return;
+    if (emailBackupBusyRef.current) return;
     const currentDb = overrideDb ?? dbRef.current;
     const targetEmail = (
       overrideEmail ||
@@ -1416,6 +1418,7 @@ function LedgerApp() {
       return;
     }
 
+    emailBackupBusyRef.current = true;
     setEmailBackupBusy(true);
     try {
       const res = await sendBackupToEmail({
@@ -1470,6 +1473,7 @@ function LedgerApp() {
       }));
       showToast(msg, 'error');
     } finally {
+      emailBackupBusyRef.current = false;
       setEmailBackupBusy(false);
     }
   };
@@ -1623,7 +1627,7 @@ function LedgerApp() {
         }
       }
 
-      if (!emailCfg?.enabled || emailAutoRunningRef.current) return;
+      if (!emailCfg?.enabled || emailAutoRunningRef.current || emailBackupBusyRef.current) return;
       if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
 
       const intervalHours = emailCfg.intervalHours || EMAIL_AUTO_BACKUP_INTERVAL_HOURS;
@@ -1668,7 +1672,9 @@ function LedgerApp() {
       }
     };
 
-    void checkAndRunAutoEmailBackup();
+    const startupTimerId = window.setTimeout(() => {
+      void checkAndRunAutoEmailBackup();
+    }, 6_000);
 
     const intervalId = window.setInterval(() => {
       void checkAndRunAutoEmailBackup();
@@ -1686,6 +1692,7 @@ function LedgerApp() {
     document.addEventListener('visibilitychange', onResume);
     window.addEventListener('online', onOnline);
     return () => {
+      window.clearTimeout(startupTimerId);
       window.clearInterval(intervalId);
       document.removeEventListener('visibilitychange', onResume);
       window.removeEventListener('online', onOnline);

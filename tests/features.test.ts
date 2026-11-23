@@ -60,6 +60,7 @@ import {
   extractBackupJsonFromText,
   isEmailBackupDue,
   isValidEmailAddress,
+  sendBackupToEmail,
 } from '../src/utils/emailBackup.ts';
 
 function makeContact(overrides: Partial<Contact> = {}): Contact {
@@ -681,4 +682,44 @@ test('v1.3.0 features: inline basket calculator & Franco-Arabic phonetic search'
   const foundMohamed = filterContactSummaries(summaries, { search: 'mohammed' });
   assert.equal(foundMohamed.length, 1);
   assert.equal(foundMohamed[0]?.contact.id, 'c3');
+});
+
+test('v1.3.1 email delivery: sendBackupToEmail posts direct application/json without hanging on multipart', async () => {
+  const origFetch = globalThis.fetch;
+  const calls: Array<{ url: string; contentType: string | null; body: string }> = [];
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input.toString();
+    const headers = new Headers(init?.headers);
+    calls.push({
+      url,
+      contentType: headers.get('Content-Type'),
+      body: typeof init?.body === 'string' ? init.body : '',
+    });
+    return new Response(
+      JSON.stringify({
+        success: 'true',
+        message: 'Email sent',
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  try {
+    const db = createInitialDatabase('ar');
+    const result = await sendBackupToEmail({
+      db,
+      email: 'merchant@gmail.com',
+      lang: 'ar',
+    });
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.url, 'https://formsubmit.co/ajax/merchant%40gmail.com');
+    assert.equal(calls[0]?.contentType, 'application/json');
+    assert.ok(calls[0]?.body.includes('كود الاسترجاع الكامل'));
+    assert.equal(result.email, 'merchant@gmail.com');
+    assert.equal(result.needsActivation, false);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
 });

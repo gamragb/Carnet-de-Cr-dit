@@ -1,10 +1,10 @@
 {
-  "version": "1.3.0",
+  "version": "1.3.1",
   "minNativeVersion": "1.0.0",
-  "bundleUrl": "https://gamragb.github.io/Carnet-de-Cr-dit/bundle-1.3.0.zip",
+  "bundleUrl": "https://gamragb.github.io/Carnet-de-Cr-dit/bundle-1.3.1.zip",
   "apkUrl": "",
   "playStoreUrl": "https://play.google.com/store/apps/details?id=ma.carnetcredit.app",
   "mandatory": false,
-  "notesFr": "v1.3.0 : Journal quotidien des opérations (Aujourd’hui/Hier/7 j), calculatrice intégrée dans le montant (ex: 120+45) avec billets rapides (+20 à +500 DH), recherche bilingue intelligent Arabe/Français, et bouton Tout solder (100%).",
-  "notesAr": "الإصدار 1.3.0: سجل عمليات اليوم (حصيلة اليوم والأمس وآخر 7 أيام)، آلة حاسبة مدمجة في خانة المبلغ (مثال: 120+45) مع أزرار الأوراق النقدية (+20 إلى +500 درهم)، بحث ذكي بالعربية والفرنسية معاً، وزر تصفية الحساب 100% بضغطة واحدة."
+  "notesFr": "v1.3.1 : Correction définitive du blocage « Envoi en cours... » lors de la sauvegarde par email sur Android (envoi JSON instantané avec délai de sécurité strict), journal quotidien, calculatrice intégrée et recherche bilingue.",
+  "notesAr": "الإصدار 1.3.1: إصلاح جذري لمشكل توقف زر الإيميل في « جاري الإرسال... » على الأندرويد (إرسال فوري وسريع مع مهلة أمان صارمة)، بالإضافة إلى سجل اليوم، الآلة الحاسبة المدمجة، والبحث الذكي بالعربية والفرنسية."
 }

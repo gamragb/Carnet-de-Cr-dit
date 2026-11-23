@@ -253,6 +253,24 @@ export function formatEmailBackupError(err: unknown, lang: AppLanguage): string 
   );
 }
 
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = globalThis.setTimeout(() => {
+      reject(new Error(`SocketTimeoutException: ${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    promise.then(
+      (val) => {
+        globalThis.clearTimeout(timer);
+        resolve(val);
+      },
+      (err) => {
+        globalThis.clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
 export async function syncNativeEmailBackupConfig(options: {
   enabled: boolean;
   email: string;
@@ -263,7 +281,7 @@ export async function syncNativeEmailBackupConfig(options: {
   const plugin = await getNativeEmailPlugin();
   if (!plugin?.configureEmailBackup) return;
   try {
-    await plugin.configureEmailBackup(options);
+    await withTimeout(plugin.configureEmailBackup(options), 4_000, 'configureEmailBackup');
   } catch {
     // Non-fatal on older native shell
   }
@@ -273,7 +291,7 @@ export async function getNativeEmailBackupStatus() {
   const plugin = await getNativeEmailPlugin();
   if (!plugin?.getEmailStatus) return null;
   try {
-    return await plugin.getEmailStatus();
+    return await withTimeout(plugin.getEmailStatus(), 3_500, 'getEmailStatus');
   } catch {
     return null;
   }
@@ -283,7 +301,7 @@ export async function clearAllNativeBackups(): Promise<void> {
   const plugin = await getNativeEmailPlugin();
   if (plugin?.clearAllBackups) {
     try {
-      await plugin.clearAllBackups();
+      await withTimeout(plugin.clearAllBackups(), 4_000, 'clearAllBackups');
       return;
     } catch {
       // Fallback below
@@ -291,13 +309,17 @@ export async function clearAllNativeBackups(): Promise<void> {
   }
   if (plugin?.configureEmailBackup) {
     try {
-      await plugin.configureEmailBackup({
-        enabled: false,
-        email: '',
-        intervalHours: EMAIL_AUTO_BACKUP_INTERVAL_HOURS,
-        payloadJson: '',
-        attachmentJson: '',
-      });
+      await withTimeout(
+        plugin.configureEmailBackup({
+          enabled: false,
+          email: '',
+          intervalHours: EMAIL_AUTO_BACKUP_INTERVAL_HOURS,
+          payloadJson: '',
+          attachmentJson: '',
+        }),
+        4_000,
+        'configureEmailBackupClear'
+      );
     } catch {
       // Ignore cleanup errors
     }
@@ -327,131 +349,74 @@ function parseFormSubmitResponse(
   return { ok, needsActivation, message: msg, status };
 }
 
-async function postFormSubmitRequest(
+async function postFormSubmitJsonViaFetch(
   endpoint: string,
-  init: RequestInit
+  payloadJson: string,
+  timeoutMs = 8_000
 ): Promise<{ ok: boolean; needsActivation: boolean; message: string; status: number }> {
-  const res = await fetch(endpoint, init);
-  let rawData: unknown = {};
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = controller
+    ? globalThis.setTimeout(() => {
+        try {
+          controller.abort();
+        } catch {
+          // Ignore abort error
+        }
+      }, timeoutMs)
+    : null;
+
   try {
-    rawData = await res.text();
-  } catch {
-    rawData = {};
-  }
-  return parseFormSubmitResponse(res.status, rawData);
-}
-
-function buildRawMultipartBody(
-  payload: Record<string, string>,
-  attachmentJson: string,
-  fileName: string,
-  mimeType: string,
-  boundary: string
-): string {
-  const parts: string[] = [];
-  for (const [key, value] of Object.entries(payload)) {
-    const safeKey = key.replace(/"/g, "'").replace(/[\r\n]/g, '');
-    parts.push(
-      `--${boundary}\r\n` +
-        `Content-Disposition: form-data; name="${safeKey}"\r\n\r\n` +
-        `${value}\r\n`
+    const res = await withTimeout(
+      fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: payloadJson,
+        signal: controller?.signal,
+      }),
+      timeoutMs + 500,
+      'fetchFormSubmit'
     );
+    let rawData: unknown = {};
+    try {
+      rawData = await withTimeout(res.text(), 4_000, 'readResponseText');
+    } catch {
+      rawData = {};
+    }
+    return parseFormSubmitResponse(res.status, rawData);
+  } finally {
+    if (timer !== null) {
+      globalThis.clearTimeout(timer);
+    }
   }
-  parts.push(
-    `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="attachment"; filename="${fileName}"\r\n` +
-      `Content-Type: ${mimeType}; charset=UTF-8\r\n\r\n` +
-      `${attachmentJson}\r\n`
-  );
-  parts.push(`--${boundary}--\r\n`);
-  return parts.join('');
 }
 
-async function sendViaCapacitorHttp(
+async function sendViaCapacitorHttpJson(
   endpoint: string,
   payload: Record<string, string>,
-  attachmentJson: string,
-  jsonFileName: string
+  timeoutMs = 8_000
 ): Promise<{ ok: boolean; needsActivation: boolean; message: string; status: number }> {
-  const baseHeaders = {
-    Accept: 'application/json',
-    Origin: 'https://gamragb.github.io',
-    Referer: 'https://gamragb.github.io/Carnet-de-Cr-dit/',
-    'User-Agent':
-      'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124.0.0.0 Mobile Safari/537.36',
-  };
-
-  // 1. Primary: native multipart/form-data with `.json` file attachment
-  const boundaryJson = `----CarnetCapJson${Date.now()}`;
-  const resJson = await CapacitorHttp.post({
-    url: endpoint,
-    headers: {
-      ...baseHeaders,
-      'Content-Type': `multipart/form-data; boundary=${boundaryJson}`,
-    },
-    data: buildRawMultipartBody(
-      payload,
-      attachmentJson,
-      jsonFileName,
-      'application/json',
-      boundaryJson
-    ),
-    connectTimeout: 20_000,
-    readTimeout: 30_000,
-  });
-  const parsedJson = parseFormSubmitResponse(resJson.status, resJson.data);
-  if (parsedJson.ok) return parsedJson;
-
-  // 2. Fallback: native multipart/form-data with `.txt` attachment
-  const boundaryTxt = `----CarnetCapTxt${Date.now()}`;
-  const txtFileName = jsonFileName.replace(/\.json$/i, '.txt');
-  const resTxt = await CapacitorHttp.post({
-    url: endpoint,
-    headers: {
-      ...baseHeaders,
-      'Content-Type': `multipart/form-data; boundary=${boundaryTxt}`,
-    },
-    data: buildRawMultipartBody(
-      payload,
-      attachmentJson,
-      txtFileName,
-      'text/plain',
-      boundaryTxt
-    ),
-    connectTimeout: 20_000,
-    readTimeout: 30_000,
-  });
-  const parsedTxt = parseFormSubmitResponse(resTxt.status, resTxt.data);
-  if (parsedTxt.ok) return parsedTxt;
-
-  // 3. Final native fallback: standard JSON body
-  const resBody = await CapacitorHttp.post({
-    url: endpoint,
-    headers: {
-      ...baseHeaders,
-      'Content-Type': 'application/json; charset=UTF-8',
-    },
-    data: payload,
-    connectTimeout: 20_000,
-    readTimeout: 30_000,
-  });
-  const parsedBody = parseFormSubmitResponse(resBody.status, resBody.data);
-  return parsedBody.ok || parsedBody.message ? parsedBody : parsedJson;
-}
-
-function buildFormSubmitMultipart(
-  payload: Record<string, string>,
-  attachmentJson: string,
-  fileName: string,
-  mimeType: string
-): FormData {
-  const formData = new FormData();
-  for (const [key, value] of Object.entries(payload)) {
-    formData.append(key, value);
-  }
-  const blob = new Blob([attachmentJson], { type: mimeType });
-  formData.append('attachment', blob, fileName);
-  return formData;
+  const resBody = await withTimeout(
+    CapacitorHttp.post({
+      url: endpoint,
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json; charset=UTF-8',
+        Origin: 'https://gamragb.github.io',
+        Referer: 'https://gamragb.github.io/Carnet-de-Cr-dit/',
+        'User-Agent':
+          'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124.0.0.0 Mobile Safari/537.36',
+      },
+      data: payload,
+      connectTimeout: 6_000,
+      readTimeout: 7_000,
+    }),
+    timeoutMs,
+    'CapacitorHttp.post'
+  );
+  return parseFormSubmitResponse(resBody.status, resBody.data);
 }
 
 export async function sendBackupToEmail(options: {
@@ -466,43 +431,43 @@ export async function sendBackupToEmail(options: {
 
   const payload = buildEmailBackupPayload(options.db, cleanEmail, options.lang);
   const payloadJson = JSON.stringify(payload);
-  const attachmentJson = buildEmailAttachmentJSONBackup(options.db);
-  const jsonFileName = buildEmailBackupFileName();
   const endpoint = `https://formsubmit.co/ajax/${encodeURIComponent(cleanEmail)}`;
 
-  if (isNativeApp()) {
-    // Path 1: Custom Java plugin `GoogleDriveBackup.sendEmailNow` (present on APK v1.2.0+)
-    const nativePlugin = await getNativeEmailPlugin();
-    if (nativePlugin?.sendEmailNow) {
-      try {
-        const nativeRes = await nativePlugin.sendEmailNow({
-          email: cleanEmail,
-          payloadJson,
-          attachmentJson,
-        });
-        return {
-          sentAt: nativeRes.sentAt || new Date().toISOString(),
-          email: nativeRes.email || cleanEmail,
-          needsActivation: Boolean(nativeRes.needsActivation),
-        };
-      } catch (nativeErr) {
-        const errMsg = nativeErr instanceof Error ? nativeErr.message : String(nativeErr ?? '');
-        // Only abort immediately when clearly offline; otherwise fall back to CapacitorHttp
-        // (crucial when an older APK received an OTA update and lacks sendEmailNow in Java!)
-        if (/Unable to resolve host|UnknownHostException|No address associated/i.test(errMsg)) {
-          throw nativeErr;
-        }
-      }
-    }
+  let lastError: unknown = null;
 
-    // Path 2: Built-in CapacitorHttp native Android HTTP (present on ALL APKs v1.0.0+)
+  // Path 1: Fast direct JSON fetch (works in <1.5s on Web, PWA, and Android WebView with Happy Eyeballs IPv4/IPv6)
+  try {
+    const fetchResult = await postFormSubmitJsonViaFetch(endpoint, payloadJson, 8_000);
+    if (fetchResult.ok) {
+      const sentAt = new Date().toISOString();
+      // Sync native status silently on Android if plugin available
+      if (isNativeApp()) {
+        void syncNativeEmailBackupConfig({
+          enabled: Boolean(options.db.settings.emailBackup?.enabled ?? true),
+          email: cleanEmail,
+          intervalHours:
+            options.db.settings.emailBackup?.intervalHours ||
+            EMAIL_AUTO_BACKUP_INTERVAL_HOURS,
+          payloadJson,
+        });
+      }
+      return {
+        sentAt,
+        email: cleanEmail,
+        needsActivation: fetchResult.needsActivation,
+      };
+    }
+    lastError = new Error(
+      fetchResult.message || `Email delivery error (${fetchResult.status})`
+    );
+  } catch (fetchErr) {
+    lastError = fetchErr;
+  }
+
+  // Path 2: Native Android fallbacks (CapacitorHttp JSON + custom Java GoogleDriveBackup plugin)
+  if (isNativeApp()) {
     try {
-      const capResult = await sendViaCapacitorHttp(
-        endpoint,
-        payload,
-        attachmentJson,
-        jsonFileName
-      );
+      const capResult = await sendViaCapacitorHttpJson(endpoint, payload, 8_500);
       if (capResult.ok) {
         return {
           sentAt: new Date().toISOString(),
@@ -510,67 +475,41 @@ export async function sendBackupToEmail(options: {
           needsActivation: capResult.needsActivation,
         };
       }
-      throw new Error(capResult.message || `Email delivery error (${capResult.status})`);
+      lastError = new Error(
+        capResult.message || `Email delivery error (${capResult.status})`
+      );
     } catch (capErr) {
-      const errMsg = capErr instanceof Error ? capErr.message : String(capErr ?? '');
-      if (/Unable to resolve host|UnknownHostException|No address associated/i.test(errMsg)) {
-        throw capErr;
-      }
-      // Last resort: try WebView fetch below before surfacing error
+      lastError = capErr;
     }
-  }
 
-  // Path 3: Web / PWA (or last-resort fallback) via FormData + Blob attachment
-  let result = await postFormSubmitRequest(endpoint, {
-    method: 'POST',
-    headers: { Accept: 'application/json' },
-    body: buildFormSubmitMultipart(
-      payload,
-      attachmentJson,
-      jsonFileName,
-      'application/json;charset=utf-8'
-    ),
-  });
-
-  if (!result.ok) {
-    const txtFileName = jsonFileName.replace(/\.json$/i, '.txt');
-    const txtResult = await postFormSubmitRequest(endpoint, {
-      method: 'POST',
-      headers: { Accept: 'application/json' },
-      body: buildFormSubmitMultipart(
-        payload,
-        attachmentJson,
-        txtFileName,
-        'text/plain;charset=utf-8'
-      ),
-    });
-    if (txtResult.ok) {
-      result = txtResult;
-    } else {
-      const jsonOnlyResult = await postFormSubmitRequest(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-        },
-        body: payloadJson,
-      });
-      if (jsonOnlyResult.ok) {
-        result = jsonOnlyResult;
-      } else {
-        result = jsonOnlyResult.message ? jsonOnlyResult : result;
+    const nativePlugin = await getNativeEmailPlugin();
+    if (nativePlugin?.sendEmailNow) {
+      try {
+        const nativeRes = await withTimeout(
+          nativePlugin.sendEmailNow({
+            email: cleanEmail,
+            payloadJson,
+          }),
+          8_500,
+          'GoogleDriveBackup.sendEmailNow'
+        );
+        return {
+          sentAt: nativeRes.sentAt || new Date().toISOString(),
+          email: nativeRes.email || cleanEmail,
+          needsActivation: Boolean(nativeRes.needsActivation),
+        };
+      } catch (nativeErr) {
+        const errMsg =
+          nativeErr instanceof Error ? nativeErr.message : String(nativeErr ?? '');
+        if (!/not implemented|UNIMPLEMENTED/i.test(errMsg)) {
+          lastError = nativeErr;
+        }
       }
     }
   }
 
-  if (!result.ok) {
-    throw new Error(result.message || `Email delivery error (${result.status})`);
+  if (lastError instanceof Error) {
+    throw lastError;
   }
-
-  const sentAt = new Date().toISOString();
-  return {
-    sentAt,
-    email: cleanEmail,
-    needsActivation: result.needsActivation,
-  };
+  throw new Error(String(lastError ?? 'Email delivery failed'));
 }

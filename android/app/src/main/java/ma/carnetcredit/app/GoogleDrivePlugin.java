@@ -12,7 +12,7 @@ import java.util.concurrent.Executors;
 
 @CapacitorPlugin(name = "GoogleDriveBackup")
 public class GoogleDrivePlugin extends Plugin {
-    private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final ExecutorService executor = Executors.newCachedThreadPool();
 
     @PluginMethod
     public void getStatus(PluginCall call) {

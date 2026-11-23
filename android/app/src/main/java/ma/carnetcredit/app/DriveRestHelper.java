@@ -253,49 +253,10 @@ public final class DriveRestHelper {
             throw new IOException("INVALID_EMAIL");
         }
         String nowIso = nowUtcIso();
-        String datePart = nowIso.length() >= 10 ? nowIso.substring(0, 10) : nowIso;
         String freshPayload = refreshEmailPayloadTimestamp(payloadJson, nowIso);
-        String resolvedAttachment = (attachmentJson != null && !attachmentJson.trim().isEmpty())
-            ? attachmentJson.trim()
-            : extractAttachmentJsonFallback(freshPayload);
-
         String urlStr = "https://formsubmit.co/ajax/" + URLEncoder.encode(cleanEmail, "UTF-8");
 
-        // 1. Primary: multipart/form-data with downloadable `.json` backup file attached
-        if (!resolvedAttachment.isEmpty()) {
-            try {
-                byte[] mpJson = buildFormSubmitMultipartBody(
-                    freshPayload,
-                    resolvedAttachment,
-                    "carnet-credit-backup-" + datePart + ".json",
-                    "application/json",
-                    "----CarnetCreditJsonBoundary" + System.currentTimeMillis()
-                );
-                String boundary = extractMultipartBoundary(mpJson);
-                return postFormSubmit(urlStr, "multipart/form-data; boundary=" + boundary, mpJson, nowIso);
-            } catch (UnknownHostException | ConnectException | SocketTimeoutException netEx) {
-                throw netEx;
-            } catch (Exception primaryEx) {
-                // 2. Fallback: retry attachment as `.txt` containing identical JSON backup
-                try {
-                    byte[] mpTxt = buildFormSubmitMultipartBody(
-                        freshPayload,
-                        resolvedAttachment,
-                        "carnet-credit-backup-" + datePart + ".txt",
-                        "text/plain",
-                        "----CarnetCreditTxtBoundary" + System.currentTimeMillis()
-                    );
-                    String boundary = extractMultipartBoundary(mpTxt);
-                    return postFormSubmit(urlStr, "multipart/form-data; boundary=" + boundary, mpTxt, nowIso);
-                } catch (UnknownHostException | ConnectException | SocketTimeoutException netEx) {
-                    throw netEx;
-                } catch (Exception ignored) {
-                    // Fall through to JSON body
-                }
-            }
-        }
-
-        // 3. Final fallback: send standard JSON body (includes inline backup code)
+        // Send fast, reliable JSON body (already includes the full restorable JSON backup code inline)
         byte[] body = freshPayload.getBytes(StandardCharsets.UTF_8);
         return postFormSubmit(urlStr, "application/json; charset=UTF-8", body, nowIso);
     }
@@ -356,8 +317,8 @@ public final class DriveRestHelper {
         try {
             URL url = new URL(urlStr);
             conn = (HttpURLConnection) url.openConnection();
-            conn.setConnectTimeout(20000);
-            conn.setReadTimeout(30000);
+            conn.setConnectTimeout(10000);
+            conn.setReadTimeout(12000);
             conn.setInstanceFollowRedirects(true);
             conn.setRequestMethod("POST");
             conn.setRequestProperty("Content-Type", contentType);
