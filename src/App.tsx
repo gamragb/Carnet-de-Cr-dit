@@ -129,6 +129,8 @@ function LedgerApp() {
   const [txModalOpen, setTxModalOpen] = useState(false);
   const [txInitialContactId, setTxInitialContactId] = useState<string | null>(null);
   const [txInitialType, setTxInitialType] = useState<TransactionType>('credit_given');
+  const [txInitialAmount, setTxInitialAmount] = useState<number | null>(null);
+  const [txInitialNote, setTxInitialNote] = useState<string>('');
   const [editingTx, setEditingTx] = useState<Transaction | null>(null);
 
   const [globalReportOpen, setGlobalReportOpen] = useState(false);
@@ -463,11 +465,15 @@ function LedgerApp() {
 
   const handleOpenNewOperation = (
     contactId: string | null = null,
-    presetType: TransactionType = 'credit_given'
+    presetType: TransactionType = 'credit_given',
+    presetAmount: number | null = null,
+    presetNote = ''
   ) => {
     setEditingTx(null);
     setTxInitialContactId(contactId);
     setTxInitialType(presetType);
+    setTxInitialAmount(presetAmount);
+    setTxInitialNote(presetNote);
     setTxModalOpen(true);
   };
 
@@ -475,6 +481,8 @@ function LedgerApp() {
     setEditingTx(tx);
     setTxInitialContactId(tx.contactId);
     setTxInitialType(tx.type);
+    setTxInitialAmount(null);
+    setTxInitialNote('');
     setTxModalOpen(true);
   };
 
@@ -2338,6 +2346,9 @@ function LedgerApp() {
             totals={totals}
             analytics={analytics}
             filteredSummaries={filteredDashboardSummaries}
+            summariesById={summariesById}
+            transactions={db.transactions}
+            todayISO={todayISO}
             allContactsCount={activeContactsCount}
             search={dashboardSearch}
             onSearchChange={setDashboardSearch}
@@ -2353,6 +2364,7 @@ function LedgerApp() {
             onDismissBackupReminder={() => setBackupReminderDismissed(true)}
             onOpenContact={handleOpenContact}
             onQuickOperation={(cid) => handleOpenNewOperation(cid)}
+            onEditTransaction={handleOpenEditOperation}
             onOpenDeadlines={() => setActiveTab('deadlines')}
             onAddContact={handleOpenNewContact}
             onOpenGlobalReport={() => setGlobalReportOpen(true)}
@@ -2505,10 +2517,14 @@ function LedgerApp() {
         summariesById={summariesById}
         initialContactId={txInitialContactId}
         initialType={txInitialType}
+        initialAmount={txInitialAmount}
+        initialNote={txInitialNote}
         editingTransaction={editingTx}
         onClose={() => {
           setTxModalOpen(false);
           setEditingTx(null);
+          setTxInitialAmount(null);
+          setTxInitialNote('');
         }}
         onSave={handleSaveTransaction}
         onQuickCreateContact={handleQuickCreateContact}

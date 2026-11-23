@@ -346,6 +346,141 @@ export function computeAllLedgers(
   };
 }
 
+/**
+ * Normalizes Arabic text (unifies hamzas, taa marbuta, alif maqsura, strips diacritics).
+ */
+export function normalizeArabicSearchText(raw: string): string {
+  return raw
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[\u064B-\u065F\u0670\u0640]/g, '')
+    .replace(/[أإآٱ]/g, 'ا')
+    .replace(/ة/g, 'ه')
+    .replace(/ى/g, 'ي')
+    .replace(/ؤ/g, 'و')
+    .replace(/ئ/g, 'ي');
+}
+
+/**
+ * Converts both Arabic and French/Latin names into a shared phonetic consonant skeleton
+ * so searching "karim" matches "كريم", "mohamed" matches "محمد", "youssef" matches "يوسف", etc.
+ */
+export function toPhoneticSkeleton(raw: string): string {
+  const norm = normalizeArabicSearchText(raw);
+  if (!norm) return '';
+
+  return norm
+    .split(/[^a-z0-9\u0621-\u064a]+/)
+    .filter(Boolean)
+    .map((word) => {
+      let w = word
+        .replace(/kh/g, 'x')
+        .replace(/gh/g, 'g')
+        .replace(/ch|sh/g, 'š')
+        .replace(/ou|oo/g, 'w')
+        .replace(/ee|ie/g, 'y')
+        .replace(/ph/g, 'f')
+        .replace(/th/g, 't')
+        .replace(/dh/g, 'd')
+        .replace(/qu/g, 'k')
+        .replace(/c(?=[aoukrlt]|$)/g, 'k')
+        .replace(/c(?=[eiy])/g, 's')
+        .replace(/š/g, 'c')
+        .replace(/p/g, 'b')
+        .replace(/v/g, 'f');
+
+      let mapped = '';
+      for (let i = 0; i < w.length; i += 1) {
+        const ch = w[i];
+        switch (ch) {
+          case 'ب':
+            mapped += 'b';
+            break;
+          case 'ت':
+          case 'ط':
+          case 'ث':
+            mapped += 't';
+            break;
+          case 'ج':
+            mapped += 'j';
+            break;
+          case 'ح':
+            mapped += 'h';
+            break;
+          case 'ه':
+            if (i < w.length - 1) mapped += 'h';
+            break;
+          case 'خ':
+            mapped += 'x';
+            break;
+          case 'د':
+          case 'ض':
+          case 'ذ':
+            mapped += 'd';
+            break;
+          case 'ر':
+            mapped += 'r';
+            break;
+          case 'ز':
+          case 'ظ':
+            mapped += 'z';
+            break;
+          case 'س':
+          case 'ص':
+            mapped += 's';
+            break;
+          case 'ش':
+            mapped += 'c';
+            break;
+          case 'ع':
+            if (i === 0) mapped += 'a';
+            break;
+          case 'غ':
+            mapped += 'g';
+            break;
+          case 'ف':
+            mapped += 'f';
+            break;
+          case 'ق':
+          case 'ك':
+            mapped += 'k';
+            break;
+          case 'ل':
+            mapped += 'l';
+            break;
+          case 'م':
+            mapped += 'm';
+            break;
+          case 'ن':
+            mapped += 'n';
+            break;
+          case 'و':
+          case 'w':
+            if (i === 0) mapped += 'w';
+            break;
+          case 'ي':
+          case 'y':
+            if (i === 0) mapped += 'y';
+            break;
+          case 'ا':
+          case 'ء':
+            break;
+          default:
+            if (/[bcdfghjklmnrstxz0-9]/.test(ch)) {
+              if (ch === 'h' && i === w.length - 1) break;
+              mapped += ch;
+            }
+            break;
+        }
+      }
+      // Collapse consecutive duplicate consonants (e.g. mohammed -> mhmd, youssef -> ysf, hassan -> hsn)
+      return mapped.replace(/(.)\1+/g, '$1');
+    })
+    .filter(Boolean)
+    .join(' ');
+}
+
 export function filterContactSummaries(
   summaries: ContactSummary[],
   options: {
@@ -358,6 +493,8 @@ export function filterContactSummaries(
   }
 ): ContactSummary[] {
   const query = (options.search ?? '').trim().toLowerCase();
+  const normQuery = normalizeArabicSearchText(query);
+  const phoneticQuery = toPhoneticSkeleton(query);
   const phoneQuery = normalizeSearchPhone(query);
   const filter = options.filter ?? 'all';
   const category = options.category ?? 'ALL';
@@ -379,8 +516,20 @@ export function filterContactSummaries(
       if (filter === 'overdue' && !item.isOverdue) return false;
 
       if (query) {
-        const nameMatch = item.contact.name.toLowerCase().includes(query);
-        const noteMatch = (item.contact.note ?? '').toLowerCase().includes(query);
+        const nameLower = item.contact.name.toLowerCase();
+        const noteLower = (item.contact.note ?? '').toLowerCase();
+        const nameNorm = normalizeArabicSearchText(item.contact.name);
+        const noteNorm = normalizeArabicSearchText(item.contact.note ?? '');
+        const namePhonetic = toPhoneticSkeleton(item.contact.name);
+
+        const nameMatch =
+          nameLower.includes(query) ||
+          (normQuery.length > 0 && nameNorm.includes(normQuery)) ||
+          (phoneticQuery.replace(/\s+/g, '').length >= 2 &&
+            namePhonetic.includes(phoneticQuery));
+        const noteMatch =
+          noteLower.includes(query) ||
+          (normQuery.length > 0 && noteNorm.includes(normQuery));
         const catRawMatch = item.contact.category.toLowerCase().includes(query);
         const catFrMatch = CATEGORY_LABELS.fr[item.contact.category]
           .toLowerCase()

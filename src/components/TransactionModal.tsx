@@ -27,9 +27,11 @@ import type {
   TransactionType,
 } from '../types/ledger.ts';
 import {
+  evaluateMoneyExpression,
   formatMAD,
   formatMoroccanPhone,
   getCurrentLocalDateTime,
+  hasMathOperators,
   isValidPhoneInput,
   parseMoneyInput,
   roundMoney,
@@ -44,6 +46,8 @@ interface TransactionModalProps {
   summariesById: Map<string, ContactSummary>;
   initialContactId?: string | null;
   initialType?: TransactionType;
+  initialAmount?: number | null;
+  initialNote?: string;
   editingTransaction?: Transaction | null;
   onClose: () => void;
   onSave: (data: {
@@ -73,6 +77,8 @@ const PAYMENT_METHODS: PaymentMethod[] = [
   'Marchandise',
 ];
 
+const QUICK_BANKNOTE_AMOUNTS = [20, 50, 100, 200, 500];
+
 function addDaysToISO(days: number, baseISODate?: string): string {
   const cleanBase = baseISODate && /^\d{4}-\d{2}-\d{2}$/.test(baseISODate) ? baseISODate : '';
   const d = cleanBase
@@ -96,6 +102,8 @@ export function TransactionModal({
   summariesById,
   initialContactId,
   initialType,
+  initialAmount,
+  initialNote,
   editingTransaction,
   onClose,
   onSave,
@@ -170,17 +178,29 @@ export function TransactionModal({
           : contacts.find((c) => !c.archived)?.id ?? contacts[0]?.id ?? '';
       setContactId(defaultContact);
       setType(initialType ?? 'credit_given');
-      setAmountInput('');
+      setAmountInput(
+        typeof initialAmount === 'number' && initialAmount > 0
+          ? String(roundMoney(initialAmount))
+          : ''
+      );
       setOccurredAt(getCurrentLocalDateTime());
       setDueDate('');
       setPaymentMethod('Espèces');
-      setNote('');
+      setNote(initialNote ?? '');
       setReference('');
       setIsDiscount(false);
       setAttachmentDataUrl(undefined);
       setAttachmentName(undefined);
     }
-  }, [open, editingTransaction, initialContactId, initialType, contacts]);
+  }, [
+    open,
+    editingTransaction,
+    initialContactId,
+    initialType,
+    initialAmount,
+    initialNote,
+    contacts,
+  ]);
 
   const selectedSummary = useMemo(
     () => (contactId ? summariesById.get(contactId) ?? null : null),
@@ -597,7 +617,7 @@ export function TransactionModal({
             </label>
           )}
 
-          {/* Amount */}
+          {/* Amount + Inline Calculator + Quick Banknote Chips */}
           <div>
             <label
               htmlFor="tx-amount"
@@ -609,16 +629,68 @@ export function TransactionModal({
               <input
                 id="tx-amount"
                 type="text"
-                inputMode="decimal"
+                inputMode="text"
                 value={amountInput}
                 onChange={(e) => setAmountInput(e.target.value)}
-                placeholder="0,00"
+                placeholder="0,00  (ex: 120+45)"
                 className="tabular-nums w-full rounded-2xl border border-slate-200 bg-slate-50/70 py-3.5 pl-4 pr-16 text-left text-xl font-extrabold text-slate-900 outline-none transition focus:border-teal-600 focus:bg-white focus:ring-2 focus:ring-teal-600/15 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
               />
               <span className="pointer-events-none absolute top-1/2 right-4 -translate-y-1/2 text-sm font-extrabold text-slate-400">
                 {currencyLabel}
               </span>
             </div>
+
+            {/* Live Math Expression Preview */}
+            {hasMathOperators(amountInput) &&
+              evaluateMoneyExpression(amountInput) !== null && (
+                <div className="mt-2 flex items-center justify-between gap-2 rounded-xl border border-teal-200 bg-teal-50/90 px-3 py-1.5 text-xs dark:border-teal-800 dark:bg-teal-950/60">
+                  <span className="font-bold text-teal-900 dark:text-teal-200">
+                    {t.calcPreviewLabel(
+                      formatMAD(evaluateMoneyExpression(amountInput) ?? 0, {
+                        lang,
+                        hideDecimals,
+                      })
+                    )}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const val = evaluateMoneyExpression(amountInput);
+                      if (val !== null) setAmountInput(String(val));
+                    }}
+                    className="rounded-lg bg-teal-700 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-teal-800"
+                  >
+                    {t.calcApplyBtn}
+                  </button>
+                </div>
+              )}
+
+            {/* Quick Moroccan Banknote Chips (+20, +50, +100, +200, +500) */}
+            <div dir="ltr" className="mt-2 flex flex-wrap items-center gap-1.5">
+              {QUICK_BANKNOTE_AMOUNTS.map((bill) => (
+                <button
+                  key={bill}
+                  type="button"
+                  onClick={() => {
+                    const base = parseMoneyInput(amountInput) ?? 0;
+                    setAmountInput(String(roundMoney(base + bill)));
+                  }}
+                  className="rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-extrabold text-slate-700 transition hover:border-teal-500 hover:bg-teal-50 hover:text-teal-800 active:scale-[0.97] dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                >
+                  +{bill}
+                </button>
+              ))}
+              {amountInput.trim() && (
+                <button
+                  type="button"
+                  onClick={() => setAmountInput('')}
+                  className="rounded-xl border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-extrabold text-rose-700 transition hover:bg-rose-100 dark:border-rose-900/60 dark:bg-rose-950/50 dark:text-rose-300"
+                >
+                  {t.clearAmountBtn}
+                </button>
+              )}
+            </div>
+
             {overLimitAlert && (
               <div className="mt-2 flex items-center gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 dark:border-amber-900 dark:bg-amber-950/50 dark:text-amber-300">
                 <AlertTriangle className="h-4 w-4 shrink-0" />

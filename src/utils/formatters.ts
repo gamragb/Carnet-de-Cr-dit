@@ -13,17 +13,79 @@ export function normalizeDigitInput(raw: string): string {
     .replace(/\u066c/g, '');
 }
 
+export function hasMathOperators(raw: string): boolean {
+  const clean = normalizeDigitInput(raw).trim();
+  return /\d\s*[+\-*×/÷]\s*\d/.test(clean);
+}
+
+/**
+ * Safely evaluates simple arithmetic expressions like "120+45+15" or "25*4-10"
+ * without using eval() or Function(). Respects * and / precedence over + and -.
+ */
+export function evaluateMoneyExpression(raw: string): number | null {
+  const clean = normalizeDigitInput(raw)
+    .replace(/\s+/g, '')
+    .replace(/,/g, '.')
+    .replace(/×/g, '*')
+    .replace(/÷/g, '/');
+
+  if (!clean || !/^\d+(?:\.\d+)?(?:[+\-*/]\d+(?:\.\d+)?)*$/.test(clean)) {
+    return null;
+  }
+
+  const tokens = clean.match(/\d+(?:\.\d+)?|[+\-*/]/g);
+  if (!tokens || tokens.length === 0) return null;
+
+  // Pass 1: resolve * and /
+  const addSubQueue: Array<number | '+' | '-'> = [];
+  let current = Number(tokens[0]);
+  if (!Number.isFinite(current)) return null;
+
+  for (let i = 1; i < tokens.length; i += 2) {
+    const op = tokens[i];
+    const nextVal = Number(tokens[i + 1]);
+    if (!Number.isFinite(nextVal)) return null;
+
+    if (op === '*') {
+      current *= nextVal;
+    } else if (op === '/') {
+      if (nextVal === 0) return null;
+      current /= nextVal;
+    } else if (op === '+' || op === '-') {
+      addSubQueue.push(current, op);
+      current = nextVal;
+    } else {
+      return null;
+    }
+  }
+  addSubQueue.push(current);
+
+  // Pass 2: resolve + and -
+  let total = Number(addSubQueue[0]);
+  for (let i = 1; i < addSubQueue.length; i += 2) {
+    const op = addSubQueue[i];
+    const val = Number(addSubQueue[i + 1]);
+    total = op === '+' ? total + val : total - val;
+  }
+
+  if (!Number.isFinite(total) || total <= 0) {
+    return null;
+  }
+  const rounded = roundMoney(total);
+  return rounded > 0 ? rounded : null;
+}
+
 export function parseMoneyInput(raw: string): number | null {
   const clean = normalizeDigitInput(raw).replace(/\s+/g, '').replace(',', '.');
-  if (!/^\d+(?:\.\d+)?$/.test(clean)) {
-    return null;
+  if (/^\d+(?:\.\d+)?$/.test(clean)) {
+    const num = Number(clean);
+    if (!Number.isFinite(num) || num <= 0) {
+      return null;
+    }
+    const rounded = roundMoney(num);
+    return rounded > 0 ? rounded : null;
   }
-  const num = Number(clean);
-  if (!Number.isFinite(num) || num <= 0) {
-    return null;
-  }
-  const rounded = roundMoney(num);
-  return rounded > 0 ? rounded : null;
+  return evaluateMoneyExpression(raw);
 }
 
 export interface FormatMADOptions {

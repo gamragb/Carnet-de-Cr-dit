@@ -5,7 +5,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Contact, Transaction } from '../src/types/ledger.ts';
 import {
+  evaluateMoneyExpression,
   formatMAD,
+  hasMathOperators,
   isValidPhoneInput,
   normalizeDigitInput,
   parseMoneyInput,
@@ -15,6 +17,7 @@ import {
   computeAnalytics,
   computeContactLedger,
   filterContactSummaries,
+  toPhoneticSkeleton,
 } from '../src/utils/ledgerMath.ts';
 import {
   buildDueCalendarICS,
@@ -636,4 +639,46 @@ test('bundle safety: src/ contains zero value-import circular dependencies (prev
   }
 
   assert.deepEqual(cycles, [], `Circular value imports detected:\n${cycles.join('\n')}`);
+});
+
+test('v1.3.0 features: inline basket calculator & Franco-Arabic phonetic search', () => {
+  // 1. Inline arithmetic expression calculator
+  assert.equal(hasMathOperators('150'), false);
+  assert.equal(hasMathOperators('120+45+15'), true);
+  assert.equal(evaluateMoneyExpression('120 + 45 + 15.5'), 180.5);
+  assert.equal(evaluateMoneyExpression('50 * 3 + 25'), 175);
+  assert.equal(evaluateMoneyExpression('200 - 45,25'), 154.75);
+  assert.equal(evaluateMoneyExpression('١٠٠ + ٥٠ × ٢'), 200);
+  assert.equal(evaluateMoneyExpression('100 / 0'), null);
+  assert.equal(evaluateMoneyExpression('50 - 100'), null);
+  assert.equal(parseMoneyInput('120+30'), 150);
+
+  // 2. Bidirectional Franco-Arabic phonetic skeleton search
+  assert.equal(toPhoneticSkeleton('كريم'), toPhoneticSkeleton('Karim'));
+  assert.equal(toPhoneticSkeleton('محمد'), toPhoneticSkeleton('Mohamed'));
+  assert.equal(toPhoneticSkeleton('يوسف'), toPhoneticSkeleton('Youssef'));
+  assert.equal(toPhoneticSkeleton('فاطمة'), toPhoneticSkeleton('Fatima'));
+  assert.equal(toPhoneticSkeleton('رشيد'), toPhoneticSkeleton('Rachid'));
+
+  const contacts: Contact[] = [
+    makeContact({ id: 'c1', name: 'كريم بناني' }),
+    makeContact({ id: 'c2', name: 'Youssef El Mansouri' }),
+    makeContact({ id: 'c3', name: 'محمد أمين' }),
+  ];
+  const { summaries } = computeAllLedgers(contacts, [], '2026-11-23');
+
+  // Searching in French finds Arabic contact "كريم بناني"
+  const foundKarim = filterContactSummaries(summaries, { search: 'karim' });
+  assert.equal(foundKarim.length, 1);
+  assert.equal(foundKarim[0]?.contact.id, 'c1');
+
+  // Searching in Arabic finds French contact "Youssef El Mansouri"
+  const foundYoussef = filterContactSummaries(summaries, { search: 'يوسف' });
+  assert.equal(foundYoussef.length, 1);
+  assert.equal(foundYoussef[0]?.contact.id, 'c2');
+
+  // Searching "mohammed" finds "محمد أمين"
+  const foundMohamed = filterContactSummaries(summaries, { search: 'mohammed' });
+  assert.equal(foundMohamed.length, 1);
+  assert.equal(foundMohamed[0]?.contact.id, 'c3');
 });

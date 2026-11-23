@@ -60,7 +60,12 @@ interface ContactDetailViewProps {
   onEditContact: (contact: Contact) => void;
   onToggleArchiveContact: (contact: Contact) => void;
   onDeleteContact: (contact: Contact) => void;
-  onAddTransaction: (contactId: string, presetType?: TransactionType) => void;
+  onAddTransaction: (
+    contactId: string,
+    presetType?: TransactionType,
+    presetAmount?: number | null,
+    presetNote?: string
+  ) => void;
   onEditTransaction: (tx: Transaction) => void;
   onDeleteTransaction: (tx: Transaction) => void;
   onToggleDueResolved: (txId: string) => void;
@@ -397,24 +402,40 @@ export function ContactDetailView({
         </button>
       </section>
 
-      {/* Quick Partial Payment Shortcut */}
+      {/* Quick Partial or Full Settlement Shortcut */}
       {balance !== 0 && (
-        <div className="flex items-center justify-between gap-2 rounded-2xl border border-teal-200 bg-teal-50/70 px-3.5 py-2.5 dark:border-teal-900 dark:bg-teal-950/40">
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-teal-200 bg-teal-50/70 px-3.5 py-2.5 dark:border-teal-900 dark:bg-teal-950/40">
           <span className="text-xs font-semibold text-teal-900 dark:text-teal-200">
             {balance > 0 ? t.quickSettleCollectPrompt : t.quickSettlePayPrompt}
           </span>
-          <button
-            type="button"
-            onClick={() =>
-              onAddTransaction(
-                contact.id,
-                balance > 0 ? 'payment_received' : 'payment_made'
-              )
-            }
-            className="shrink-0 rounded-xl bg-teal-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-teal-800"
-          >
-            {balance > 0 ? t.collectBtn : t.payBtn}
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() =>
+                onAddTransaction(
+                  contact.id,
+                  balance > 0 ? 'payment_received' : 'payment_made'
+                )
+              }
+              className="shrink-0 rounded-xl border border-teal-300 bg-white px-2.5 py-1.5 text-xs font-bold text-teal-800 transition hover:bg-teal-100 dark:border-teal-800 dark:bg-slate-900 dark:text-teal-300"
+            >
+              {balance > 0 ? t.collectBtn : t.payBtn}
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                onAddTransaction(
+                  contact.id,
+                  balance > 0 ? 'payment_received' : 'payment_made',
+                  Math.abs(balance),
+                  UI_TEXT[lang].txModal.fullSettleNote
+                )
+              }
+              className="shrink-0 rounded-xl bg-teal-700 px-3 py-1.5 text-xs font-bold text-white shadow-xs transition hover:bg-teal-800 active:scale-[0.98]"
+            >
+              {t.settleFullBtn}
+            </button>
+          </div>
         </div>
       )}
 
